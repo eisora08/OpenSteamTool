@@ -64,7 +64,7 @@ namespace {
     HOOK_FUNC(OptedInMask, int64,void* pThis, AppId_t appId)
     {
         if (appId == kOnlineFixAppId && g_OnlineFixRealAppId) {
-            LOG_MISC_INFO("OptedInMask: appid {} -> {}",appId, g_OnlineFixRealAppId);
+            LOG_MISC_INFO("OptedInMask: appid {} -> {}",appId, g_OnlineFixRealAppId.load());
             appId = g_OnlineFixRealAppId;
         }
         return oOptedInMask(pThis, appId);

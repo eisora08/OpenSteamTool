@@ -201,7 +201,7 @@ namespace {
     HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
         if (!g_pCUser) {
             g_pCUser = pObj;
-            LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", g_pCUser);
+            LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", g_pCUser.load());
         }
 
         bool result = oCheckAppOwnership(pObj, appId, pOwn);

@@ -12,7 +12,7 @@ namespace {
     HOOK_FUNC(ConfigStoreGetBinary, int32, void* pObject, EConfigStore eConfigStore, const char* KeyName, char* Key, uint32 KeySize) {
         if (eConfigStore == k_EConfigStoreUserLocal && pObject && !g_pConfigStoreLocal) {
             g_pConfigStoreLocal = pObject;
-            LOG_DECRYPTIONKEY_DEBUG("ConfigStoreGetBinary: captured local ConfigStore at {}", g_pConfigStoreLocal);
+            LOG_DECRYPTIONKEY_DEBUG("ConfigStoreGetBinary: captured local ConfigStore at {}", g_pConfigStoreLocal.load());
 
         }
         std::string name(KeyName);
