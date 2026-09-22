@@ -12,7 +12,9 @@ level = "debug"
 #   "opensteamtool" → https://manifest.opensteamtool.com/{gid}   (default)
 #   "wudrm"         → http://gmrc.wudrm.com/manifest/{gid} (recommended for China users)
 #   "steamrun"      → https://manifest.steam.run/api/manifest/{gid}
-# If <Steam>/config/lua/manifest.lua defines fetch_manifest_code(gid) or
+#   "20770407"      → https://20770407.xyz/manifest/{depot}/{gid}  (requires depotId)
+#   "manifestdex"   → https://manifest.manifestdex.com/{gid}       (with User-Agent)
+# If <Steam>/config/stplug-in/manifest.lua defines fetch_manifest_code(gid) or
 # fetch_manifest_code_ex(app_id, depot_id, gid), those Lua functions take
 # priority over the url setting below.
 #
@@ -56,14 +58,41 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
+[donate]
+# Contribute manifest request codes for depots THIS account owns, so other users
+# can download those games. Codes are minted on demand from your signed-in Steam
+# session and posted immediately (never stored). Only depots you actually own are
+# ever reported — the rest of your library is never uploaded. Set enabled = false
+# to opt out completely.
+enabled = true
+# Archive base URL. Leave unset to use the built-in default (manifest.luastools.xyz).
+# url = "https://manifest.luastools.xyz"
+# Seconds to rest between mint cycles (min 30, default 30).
+# interval_secs = 30
+# How often to re-pull the (large) wanted list; minting still runs every cycle
+# (default 300 = 5 min). Freshness within a cycle comes from a per-manifest check.
+# wanted_refresh_secs = 300
+# Max Steam code mints per cycle (default 25).
+# max_mints_per_cycle = 25
+# Minimum gap between consecutive Steam calls, ms — the real rate cap (default 2000).
+# min_mint_interval_ms = 2000
+# Total mints per Steam session; 0 = unlimited (default 0).
+# max_mints_per_session = 0
+
 [stats]
 # Automatically query https://stats.opensteamtool.com/{appid} for a recommended
 # SteamID when no Lua setStat(appid, "steamid") override exists.
 # Priority: setStat > stats API when enabled and valid > hardcoded preset SteamID.
 enable_api = true
 
+[update]
+# Check for a newer BetterSteamTools build on startup. When a newer build is
+# found it is downloaded, verified (SHA-256) and staged next to Steam; the new
+# DLL loads on the next Steam launch. Set to false to disable the check entirely.
+enabled = true
+
 # Additional Lua config directories (optional).
-# Files are loaded after the default <Steam>/config/lua folder.
+# Files are loaded after the default <Steam>/config/stplug-in folder.
 # The default folder is always loaded last so user files take priority.
 # Example — load a custom directory on another drive:
 #   [lua]
@@ -71,12 +100,14 @@ enable_api = true
 [lua]
 # paths = []
 
-[inject]
-# Optional library injection into game processes.
-# The injected library must match the target process architecture.
-enabled = false
-# library_x64 = "OpenSteamTool.GameHook.x64.dll"
-# library_x86 = "OpenSteamTool.GameHook.x86.dll"
+# Optional library injection into game processes. Each [[inject]] entry is loaded
+# when every condition it sets matches the launch.
+# Example:
+#   [[inject]]
+#   path = "OpenSteamToolHook.dll"      # bare name resolves next to steam.exe; absolute path used as-is
+#   when_cmdline = "-my_special_hook"   # optional: require this substring in the launch command (default: any)
+#   when_appids = [1361510]             # optional: restrict to these appids (default: any)
+#   all_games = false                   # optional: true injects into every game, false only into Lua-added games (default: false)
 
 [cloud]
 # Optional Steam Cloud save redirection for unlocked ("lua") games, powered by
@@ -93,9 +124,38 @@ enabled = false
 # library = "cloud_redirect.dll"
 
 [remote]
-# Optional metadata mirror. Leave unset to use GitHub with jsDelivr fallback.
-# A custom mirror replaces the built-in remote sources and must include all
-# three placeholders: {channel}, {component}, and {sha256}.
+# Optional metadata mirror(s). Leave unset to use the built-in mirror chain,
+# which is tried in order until one responds:
+#   1. https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml
+#   2. https://cdn.jsdelivr.net/gh/madoiscool/steam-monitor@{channel}/{component}/{sha256}.toml
+#   3. https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml
 #
+# url_template may be a single string OR an array of strings. When set, it
+# REPLACES the built-in chain (the built-ins are not tried). Each entry must
+# contain all three placeholders: {channel}, {component}, and {sha256}.
+#
+# Single custom mirror:
 # url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
-# url_template = "https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml"
+#
+# Multiple fallbacks (tried top to bottom):
+# url_template = [
+#   "https://git.lua.tools/luatools/steam-monitor/raw/branch/{channel}/{component}/{sha256}.toml",
+#   "https://raw.githubusercontent.com/madoiscool/steam-monitor/{channel}/{component}/{sha256}.toml",
+# ]
+#
+# Mirror order for manifest fetching: "jsdelivr-first" (default) or "ost-first".
+# When "ost-first", the OST Archive is tried before GitHub ManifestHub3.
+order = "jsdelivr-first"
+
+[presence]
+# Controls how SpaceWar broadcast appears to friends for -onlinefix games.
+#   "spacewar" (default) — SpaceWar is shown as running (standard behavior).
+#   "none"              — suppress the broadcast entirely.
+display = "spacewar"
+
+[inject]
+# Architecture-specific DLL auto-injection into game processes.
+# When no [[inject]] entries exist and these paths are set, the DLL matching
+# the target process architecture (x86 or x64) is auto-injected.
+# library_x86 = "path/to/dll_x86.dll"
+# library_x64 = "path/to/dll_x64.dll"
