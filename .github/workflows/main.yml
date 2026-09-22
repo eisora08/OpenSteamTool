@@ -70,7 +70,7 @@ jobs:
         run: |
           try {
             Invoke-WebRequest -UseBasicParsing `
-              "https://purge.jsdelivr.net/gh/madoiscool/BetterSteamTools@updates/opensteamtool/latest.toml" | Out-Null
+              "https://purge.jsdelivr.net/gh/eisora08/OpenSteamTool@updates/opensteamtool/latest.toml" | Out-Null
           } catch { Write-Host "jsDelivr purge failed (non-fatal): $_" }
 
       - name: Build Debug
