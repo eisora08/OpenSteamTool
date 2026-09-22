@@ -1,11 +1,13 @@
 #include "Hooks_Decryption.h"
 #include "HookMacros.h"
 #include "dllmain.h"
+#include <atomic>
+#include <exception>
 #include <string>
 
 namespace {
 
-    void* g_pConfigStoreLocal = nullptr;
+    std::atomic<void*> g_pConfigStoreLocal{nullptr};
 
     HOOK_FUNC(ConfigStoreGetBinary, int32, void* pObject, EConfigStore eConfigStore, const char* KeyName, char* Key, uint32 KeySize) {
         if (eConfigStore == k_EConfigStoreUserLocal && pObject && !g_pConfigStoreLocal) {
@@ -19,7 +21,14 @@ namespace {
         // Expected shape: ".../<DepotId>\DecryptionKey"
         if (size_t last = name.find("\\DecryptionKey"); last != std::string::npos) {
             if (size_t start = name.find_last_of("\\", last - 1); start != std::string::npos) {
-                AppId_t depotId = std::stoul(name.substr(start + 1, last - start - 1));
+                AppId_t depotId = 0;
+                try {
+                    depotId = static_cast<AppId_t>(std::stoul(name.substr(start + 1, last - start - 1)));
+                } catch (const std::exception&) {
+                    LOG_DECRYPTIONKEY_WARN("ConfigStore::GetBinary: failed to parse depotId from '{}'",
+                                           name.substr(start + 1, last - start - 1));
+                    return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, Key, KeySize);
+                }
                 if (const auto& key = LuaConfig::GetDecryptionKey(depotId); !key.empty()) {
                     if (KeySize >= key.size()) {
                         LOG_DECRYPTIONKEY_INFO("Providing decryption key for depot {}: {}", depotId,

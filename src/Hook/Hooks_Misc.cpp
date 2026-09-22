@@ -2,6 +2,8 @@
 #include "HookMacros.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include "dllmain.h"
+#include <atomic>
+#include <mutex>
 
 namespace {
     // ── Resolve-only functions ─────────────────────────────────────
@@ -14,8 +16,14 @@ namespace {
 
     // Assumes one game at a time.  Set by SpawnProcess VEH when -onlinefix
     // is detected; cleared when a non-onlinefix game launches.
-    AppId_t   g_OnlineFixRealAppId;
+    std::atomic<AppId_t> g_OnlineFixRealAppId{0};
+    // True once the game starts SteamNetworkingSockets P2P (see GetAppID handler).
+    std::atomic<bool> g_NetworkingSocketsActive{false};
+    // Set by -realappid on the same command line. Stores the real AppId
+    // for the -realappid override; see ShouldReportOnlineFixAppId.
+    std::atomic<AppId_t> g_OnlineFixRealAppIdOverride{0};
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
+    std::mutex g_GameNameCacheMutex;
 
 
     // ── SpawnProcess interception ────────────────────────────────────────────
@@ -28,13 +36,23 @@ namespace {
         AppId_t appId = static_cast<AppId_t>(pGameID->AppID(true));
         const char* cmdLine = VehCommon::GetArg<const char*>(ctx, 3);
 
-        if (LuaConfig::HasDepot(appId) && cmdLine && strstr(cmdLine, "-onlinefix")) 
+        if (LuaConfig::HasDepot(appId) && cmdLine && strstr(cmdLine, "-onlinefix"))
         {
             g_OnlineFixRealAppId = appId;
+            g_NetworkingSocketsActive = false;
+            if (strstr(cmdLine, "-realappid")) {
+                g_OnlineFixRealAppIdOverride = appId;
+                LOG_MISC_INFO("SpawnProcess: appid {} -> {}, realappid override, cmd=\"{}\"",
+                              appId, kOnlineFixAppId, cmdLine);
+            } else {
+                g_OnlineFixRealAppIdOverride = 0;
+                LOG_MISC_INFO("SpawnProcess: appid {} -> {}, cmd=\"{}\"",
+                              appId, kOnlineFixAppId, cmdLine);
+            }
             pGameID->SetAppID(kOnlineFixAppId);
-            LOG_MISC_INFO("SpawnProcess: appid {} -> {}, cmd=\"{}\"",appId, kOnlineFixAppId, cmdLine);
         } else {
             g_OnlineFixRealAppId = 0;
+            g_OnlineFixRealAppIdOverride = 0;
         }
     }
 
@@ -62,12 +80,15 @@ namespace {
               CGameID* pOverlayCGameID, void* a6, int a7,
               void* a8, void* a9, unsigned int a10, char a11)
     {
-        if (g_OnlineFixRealAppId && pOverlayCGameID
+        AppId_t overlayAppId = g_OnlineFixRealAppIdOverride
+            ? g_OnlineFixRealAppIdOverride.load()
+            : g_OnlineFixRealAppId.load();
+        if (overlayAppId && pOverlayCGameID
             && pOverlayCGameID->AppID(true) == kOnlineFixAppId) 
         {
             LOG_MISC_INFO("BuildSpawnEnvBlock: SetAppID in OverlayCGameID {} -> {}",
-                          pOverlayCGameID->AppID(true), g_OnlineFixRealAppId);
-            pOverlayCGameID->SetAppID(g_OnlineFixRealAppId);
+                          pOverlayCGameID->AppID(true), overlayAppId);
+            pOverlayCGameID->SetAppID(overlayAppId);
         }
         return oBuildSpawnEnvBlock(pThis, pCGameID, a3, env,
                                     pOverlayCGameID, a6, a7,
@@ -137,10 +158,27 @@ namespace Hooks_Misc {
 
     
     AppId_t ResolveAppId() {
+        if (g_OnlineFixRealAppIdOverride) return g_OnlineFixRealAppIdOverride;
         if (g_OnlineFixRealAppId) return g_OnlineFixRealAppId;
         return GetAppIDForCurrentPipeWrap();
     }
-    
+
+    bool IsOnlineFixActive() {
+        return g_OnlineFixRealAppId != 0;
+    }
+
+    void NotifyNetworkingSocketsUsed() {
+        if (g_OnlineFixRealAppId && !g_NetworkingSocketsActive) {
+            g_NetworkingSocketsActive = true;
+            LOG_MISC_INFO("NetworkingSockets active: GetAppID now reports 480 for cert match");
+        }
+    }
+
+    bool ShouldReportOnlineFixAppId() {
+        if (g_OnlineFixRealAppIdOverride) return false;
+        return g_OnlineFixRealAppId != 0 && g_NetworkingSocketsActive;
+    }
+
     bool EnsureBufferCapacity(CUtlBuffer* pWrite, uint32 newCapacity,bool updatePut)
     {
         if (oCUtlBufferEnsureCapacity) {
@@ -155,19 +193,19 @@ namespace Hooks_Misc {
     }
 
     // ── Game name ────────────────────────────────────────────────
+    constexpr size_t kGameNameCacheMax = 512;
     std::string GetGameNameByAppID(AppId_t appId)
     {
-        auto it = g_GameNameCache.find(appId);
-        if (it != g_GameNameCache.end()) return it->second;
+        {
+            std::lock_guard<std::mutex> lock(g_GameNameCacheMutex);
+            auto it = g_GameNameCache.find(appId);
+            if (it != g_GameNameCache.end()) return it->second;
+        }
 
         std::string name;
 
         if (CAPTURE_READY(GetAppDataFromAppInfo)) {
             char buf[256] = {};
-            // "common/name" triggers auto-localization: the function detects
-            // prefix "common" (keyType=2) + key "name", then tries
-            // "name_localized/<current_lang>" before falling back to "name".
-            // Returns strlen+1 on success, -1 on failure.
             int64 len = oGetAppDataFromAppInfo(g_pCAppInfoCache, appId, "common/name",
                 reinterpret_cast<uint8*>(buf), sizeof(buf));
             if (len > 1)
@@ -175,7 +213,12 @@ namespace Hooks_Misc {
         }
 
         LOG_MISC_DEBUG("GetGameNameByAppID({}): {}", appId, name);
-        g_GameNameCache[appId] = name;
+        {
+            std::lock_guard<std::mutex> lock(g_GameNameCacheMutex);
+            if (g_GameNameCache.size() >= kGameNameCacheMax)
+                g_GameNameCache.clear();
+            g_GameNameCache[appId] = name;
+        }
         return name;
     }
 

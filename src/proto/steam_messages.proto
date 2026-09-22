@@ -79,6 +79,20 @@ message CMsgClientRequestEncryptedAppTicketResponse {
 
 
 // ============================================================
+// CMsgClientGetAppOwnershipTicketResponse  (eMsg 858)
+// Field order confirmed from a live capture (eresult=1, app_id=2, ticket=3):
+//   AccessDenied: 08 0F 10 CA 9E 13            (eresult=15, app_id=315210)
+//   OK:           08 01 10 07 1A B2 01 <178B>  (eresult=1,  ticket=...)
+// ============================================================
+
+message CMsgClientGetAppOwnershipTicketResponse {
+    optional int32   eresult  = 1 [default = 2];
+    optional uint32  app_id   = 2;
+    optional bytes   ticket   = 3;
+}
+
+
+// ============================================================
 // CMsgClientPICSProductInfoRequest  (eMsg 8903)
 // ============================================================
 message CMsgClientPICSProductInfoRequest {
@@ -199,6 +213,37 @@ message CContentServerDirectory_GetManifestRequestCode_Request {
 
 message CContentServerDirectory_GetManifestRequestCode_Response {
 	optional uint64 manifest_request_code = 1;
+}
+
+// Sent by Steam shortly after logon, once, listing every package the account
+// holds a license for. package_id and access_token are the two fields that
+// matter here: together they are what GetPackageInfo needs to hand back a
+// PackageInfo, whose DepotIdVec is the owned-depot list. The remaining fields
+// are kept at their real numbering so the message stays wire-accurate.
+message CMsgClientLicenseList {
+	message License {
+		optional uint32 package_id = 1;
+		optional fixed32 time_created = 2;
+		optional fixed32 time_next_process = 3;
+		optional int32 minute_limit = 4;
+		optional int32 minutes_used = 5;
+		optional uint32 payment_method = 6;
+		optional uint32 flags = 7;
+		optional string purchase_country_code = 8;
+		optional uint32 license_type = 9;
+		optional int32 territory_code = 10;
+		optional int32 change_number = 11;
+		optional uint32 owner_id = 12;
+		optional uint32 initial_period = 13;
+		optional uint32 initial_time_unit = 14;
+		optional uint32 renewal_period = 15;
+		optional uint32 renewal_time_unit = 16;
+		optional uint64 access_token = 17;
+		optional uint32 master_package_id = 18;
+	}
+
+	optional int32 eresult = 1 [default = 2];
+	repeated .CMsgClientLicenseList.License licenses = 2;
 }
 
 message CMsgIPAddress {

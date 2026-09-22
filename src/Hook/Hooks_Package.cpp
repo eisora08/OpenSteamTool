@@ -3,7 +3,12 @@
 #include "Hooks_SteamUI.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
+#include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace {
     RESOLVE_FUNC(CUtlMemoryGrow,               void*, CUtlVector<AppId_t>*, int);
@@ -12,10 +17,10 @@ namespace {
 
     CAPTURE_THIS_FUNC(GetPackageInfo, PackageInfo*,g_pCPackageInfo,void* pThis, uint32 packageId, uint64 accessToken);
     
-    void* g_pCUser = nullptr;
-    PackageInfo* g_pInjectedPackageInfo = nullptr;
-    bool  g_licenseInitialized = false;
-    bool  g_licenseRefreshPending = false;
+    std::atomic<void*> g_pCUser{nullptr};
+    std::atomic<PackageInfo*> g_pInjectedPackageInfo{nullptr};
+    std::atomic<bool> g_licenseInitialized{false};
+    std::atomic<bool> g_licenseRefreshPending{false};
 
     constexpr PackageId_t kInjectedPackageId = 0;
     constexpr uint64_t kInjectedPkgAccessToken = 10660652434190618804ull;
@@ -88,6 +93,111 @@ namespace {
     }
 
 
+    // ── Owned depot enumeration ──────────────────────────────────────────────
+    // The license list arrives once at logon and is the only enumeration of
+    // owned packages available; CheckAppOwnership answers one app at a time and
+    // only for apps something asks about. Resolving a package to its depots
+    // needs GetPackageInfo, whose `this` is captured from Steam's own first
+    // call — which normally has not happened by the time the list lands. So the
+    // list is parked here and drained on the next CheckAppOwnership.
+    std::vector<Hooks_Package::License> g_pendingLicenses;
+    std::mutex g_pendingLicensesMutex;
+    bool g_ownedDepotsDumped = false;
+
+    // Filled by the same walk that logs. Read from the donor's worker thread,
+    // written from CheckAppOwnership on a Steam thread, hence the mutex.
+    std::vector<uint32_t> g_ownedDepots;
+    bool                  g_ownedDepotsReady = false;
+    std::mutex            g_ownedDepotsMutex;
+
+    // Formats a CUtlVector<AppId_t> as "a, b, c", capped so one enormous package
+    // cannot produce an unreadable log line.
+    std::string JoinIds(const CUtlVector<AppId_t>& vec, uint32 maxShown = 64) {
+        std::string out;
+        const uint32 shown = vec.m_Size < maxShown ? vec.m_Size : maxShown;
+        for (uint32 i = 0; i < shown; ++i) {
+            if (i) out += ", ";
+            out += std::to_string(vec.m_Memory.m_pMemory[i]);
+        }
+        if (vec.m_Size > shown)
+            out += " … (+" + std::to_string(vec.m_Size - shown) + " more)";
+        return out;
+    }
+
+    void DumpOwnedDepots() {
+        size_t totalDepots = 0, resolved = 0, unresolved = 0;
+        std::vector<uint32_t> owned;
+
+        std::vector<Hooks_Package::License> licensesCopy;
+        {
+            std::lock_guard<std::mutex> lock(g_pendingLicensesMutex);
+            licensesCopy = g_pendingLicenses;
+        }
+
+        for (const auto& lic : licensesCopy) {
+            PackageInfo* pPkg = oGetPackageInfo(g_pCPackageInfo, lic.packageId, lic.accessToken);
+            if (!pPkg) {
+                // Usually a package whose info has not been cached yet rather
+                // than a real failure; logged at debug so it does not drown the
+                // useful lines.
+                ++unresolved;
+                LOG_PACKAGE_DEBUG("OwnedDepots: package {} did not resolve (token={})",
+                                  lic.packageId, lic.accessToken);
+                continue;
+            }
+
+            ++resolved;
+            totalDepots += pPkg->DepotIdVec.m_Size;
+
+            for (uint32 i = 0; i < pPkg->DepotIdVec.m_Size; ++i) {
+                const uint32_t depotId = pPkg->DepotIdVec.m_Memory.m_pMemory[i];
+                if (depotId) owned.push_back(depotId);
+            }
+
+            LOG_PACKAGE_INFO("OwnedDepots: package {} apps={} depots={} | appids=[{}] | depotids=[{}]",
+                             lic.packageId,
+                             pPkg->AppIdVec.m_Size, pPkg->DepotIdVec.m_Size,
+                             JoinIds(pPkg->AppIdVec), JoinIds(pPkg->DepotIdVec));
+        }
+
+        // Packages overlap heavily — the same depot arrives via several
+        // licenses — so dedupe before anyone intersects against this.
+        std::sort(owned.begin(), owned.end());
+        owned.erase(std::unique(owned.begin(), owned.end()), owned.end());
+
+        {
+            std::lock_guard<std::mutex> lock(g_ownedDepotsMutex);
+            g_ownedDepots      = std::move(owned);
+            g_ownedDepotsReady = true;
+        }
+
+        LOG_PACKAGE_INFO("OwnedDepots: done — {} package(s) resolved, {} unresolved, "
+                         "{} depot entr(ies), {} unique",
+                         resolved, unresolved, totalDepots, g_ownedDepots.size());
+
+        // The per-package lines above are capped by JoinIds, so for a package
+        // with hundreds of depots they show a subset. This set — deduped, after
+        // the walk — is the one the donor actually intersects a wanted list
+        // against, and deciding what gets disclosed off a list nobody can read
+        // back is not something to leave to inference. Chunked so no single
+        // line is unusable, and debug-only: it is thousands of ids.
+        {
+            std::lock_guard<std::mutex> lock(g_ownedDepotsMutex);
+            constexpr size_t kPerLine = 64;
+            for (size_t i = 0; i < g_ownedDepots.size(); i += kPerLine) {
+                const size_t end = (i + kPerLine < g_ownedDepots.size())
+                                 ? i + kPerLine : g_ownedDepots.size();
+                std::string chunk;
+                for (size_t j = i; j < end; ++j) {
+                    if (j > i) chunk += ", ";
+                    chunk += std::to_string(g_ownedDepots[j]);
+                }
+                LOG_PACKAGE_DEBUG("OwnedDepots[{}-{}]: {}", i, end - 1, chunk);
+            }
+        }
+    }
+
+
     HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
         if (!g_pCUser) {
             g_pCUser = pObj;
@@ -96,6 +206,7 @@ namespace {
 
         bool result = oCheckAppOwnership(pObj, appId, pOwn);
         TryInitFakeLicenseOnce();
+        Hooks_Package::TryDumpOwnedDepots();
 
         if (LuaConfig::HasDepot(appId,false)) {
             if (result && pOwn->ExistInPackageNums > 1) {
@@ -116,6 +227,33 @@ namespace {
 }
 
 namespace Hooks_Package {
+
+    void OnLicenseList(std::vector<License> licenses) {
+        std::lock_guard<std::mutex> lock(g_pendingLicensesMutex);
+        g_pendingLicenses  = std::move(licenses);
+        g_ownedDepotsDumped = false;
+    }
+
+    void TryDumpOwnedDepots() {
+        if (g_ownedDepotsDumped) return;
+        {
+            std::lock_guard<std::mutex> lock(g_pendingLicensesMutex);
+            if (g_pendingLicenses.empty()) return;
+        }
+        if (!CAPTURE_READY(GetPackageInfo)) return;
+
+        // Set before dumping, not after: DumpOwnedDepots calls back into
+        // steamclient, and CheckAppOwnership is what drives us — without this
+        // a re-entrant call would start a second dump.
+        g_ownedDepotsDumped = true;
+        DumpOwnedDepots();
+    }
+
+    OwnedDepots GetOwnedDepots() {
+        std::lock_guard<std::mutex> lock(g_ownedDepotsMutex);
+        return {g_ownedDepotsReady, g_ownedDepots};
+    }
+
     void Install() {
         RESOLVE_C(CUtlMemoryGrow);
         RESOLVE_C(MarkLicenseAsChanged);

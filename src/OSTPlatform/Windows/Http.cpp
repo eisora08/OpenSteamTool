@@ -11,6 +11,18 @@
 #include <format>
 #include <string>
 
+// Present since the Windows 8.1 SDK; define defensively so an older SDK header
+// still compiles (the option is simply a no-op on pre-8.1 runtimes).
+#ifndef WINHTTP_OPTION_DECOMPRESSION
+#define WINHTTP_OPTION_DECOMPRESSION 118
+#endif
+#ifndef WINHTTP_DECOMPRESSION_FLAG_ALL
+#define WINHTTP_DECOMPRESSION_FLAG_GZIP    0x00000001
+#define WINHTTP_DECOMPRESSION_FLAG_DEFLATE 0x00000002
+#define WINHTTP_DECOMPRESSION_FLAG_ALL \
+    (WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE)
+#endif
+
 namespace OSTPlatform::Http {
 namespace {
 
@@ -67,7 +79,8 @@ Result Execute(const wchar_t* method,
                uint32_t timeoutResolve,
                uint32_t timeoutConnect,
                uint32_t timeoutSend,
-               uint32_t timeoutRecv) {
+               uint32_t timeoutRecv,
+               uint32_t maxBodyBytes) {
     Result r;
 
     ParsedUrl pu = ParseUrl(url);
@@ -89,6 +102,16 @@ Result Execute(const wchar_t* method,
     }
 
     WinHttpSetTimeouts(hSession, timeoutResolve, timeoutConnect, timeoutSend, timeoutRecv);
+
+    // Ask for and transparently decode gzip/deflate. The wanted list is ~4.9 MB
+    // raw but ~2 MB gzipped, and every donor pulls it on a schedule, so this is
+    // a >50% cut on the largest recurring transfer. Best-effort: pre-Win8.1
+    // WinHTTP does not support this option and simply serves uncompressed.
+    {
+        DWORD decompress = WINHTTP_DECOMPRESSION_FLAG_ALL;
+        WinHttpSetOption(hSession, WINHTTP_OPTION_DECOMPRESSION,
+                         &decompress, sizeof(decompress));
+    }
 
     HINTERNET hConnect = WinHttpConnect(hSession, pu.host.c_str(), pu.port, 0);
     if (!hConnect) {
@@ -163,7 +186,7 @@ Result Execute(const wchar_t* method,
                 break;
             }
             r.body.resize(off + read);
-            if (r.body.size() > 256 * 1024) break;
+            if (r.body.size() >= maxBodyBytes) break;
         }
 
         if (r.status < 200 || r.status >= 300) {

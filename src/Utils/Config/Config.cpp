@@ -16,9 +16,15 @@ namespace {
         LogLevel logLevel = LogLevel::Debug;
         std::string logDir;
         std::vector<std::string> luaPaths;
-        std::string remoteUrlTemplate;
+        std::vector<std::string> remoteUrlTemplates;
+        std::string remoteOrder = "jsdelivr-first";
         bool statsEnableApi = true;
-        InjectionSettings injection;
+        bool updateEnabled = true;
+        DonateSettings donate;
+        std::vector<InjectDll> injectDlls;
+        std::string injectLibraryX86;
+        std::string injectLibraryX64;
+        std::string presenceDisplay = "spacewar";
         CloudSettings cloud;
     };
 
@@ -51,11 +57,15 @@ namespace {
         logLevel               = snapshot.logLevel;
         logDir                 = snapshot.logDir;
         luaPaths               = snapshot.luaPaths;
-        remoteUrlTemplate      = snapshot.remoteUrlTemplate;
+        remoteUrlTemplates     = snapshot.remoteUrlTemplates;
+        remoteOrder            = snapshot.remoteOrder;
         statsEnableApi         = snapshot.statsEnableApi;
-        injectEnabled          = snapshot.injection.enabled;
-        injectLibraryX86       = snapshot.injection.libraryX86;
-        injectLibraryX64       = snapshot.injection.libraryX64;
+        updateEnabled          = snapshot.updateEnabled;
+        donate                 = snapshot.donate;
+        injectDlls             = snapshot.injectDlls;
+        injectLibraryX86       = snapshot.injectLibraryX86;
+        injectLibraryX64       = snapshot.injectLibraryX64;
+        presenceDisplay        = snapshot.presenceDisplay;
         cloudEnabled           = snapshot.cloud.enabled;
         cloudLibrary           = snapshot.cloud.library;
     }
@@ -85,12 +95,12 @@ namespace {
             LOG_INFO("Config file not found, using defaults");
             ApplyManifestProvider(snapshot.manifestProvider);
             LoadResult result = ApplySnapshotLocked(snapshot);
-            LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_template={}",
+            LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
                      ToString(GetLogLevel()),
                      (uint32_t)GetLuaPaths().size(),
                      GetStatsEnableApi(),
-                     GetRemoteUrlTemplate().empty() ? "<default>" : GetRemoteUrlTemplate());
+                     (uint32_t)GetRemoteUrlTemplates().size());
             return result;
         }
 
@@ -134,10 +144,24 @@ namespace {
                 }
             }
 
-            // [remote]
+            // [remote] — url_template may be a single string or an array of strings.
             if (auto remote = tbl["remote"].as_table()) {
-                if (auto val = (*remote)["url_template"].value<std::string>()) {
-                    snapshot.remoteUrlTemplate = *val;
+                if (auto arr = (*remote)["url_template"].as_array()) {
+                    for (auto& elem : *arr) {
+                        if (auto str = elem.value<std::string>()) {
+                            snapshot.remoteUrlTemplates.push_back(*str);
+                        }
+                    }
+                } else if (auto val = (*remote)["url_template"].value<std::string>()) {
+                    snapshot.remoteUrlTemplates.push_back(*val);
+                }
+                if (auto val = (*remote)["order"].value<std::string>()) {
+                    std::string order = *val;
+                    for (auto& c : order) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (order == "github-first" || order == "jsdelivr-first")
+                        snapshot.remoteOrder = order;
+                    else
+                        LOG_WARN("Unknown remote.order \"{}\", keeping default", *val);
                 }
             }
 
@@ -148,14 +172,78 @@ namespace {
                 }
             }
 
-            // [inject]
+            // [update]
+            if (auto update = tbl["update"].as_table()) {
+                if (auto val = (*update)["enabled"].value<bool>()) {
+                    snapshot.updateEnabled = *val;
+                }
+            }
+
+            // [presence]
+            if (auto presence = tbl["presence"].as_table()) {
+                if (auto val = (*presence)["display"].value<std::string>()) {
+                    snapshot.presenceDisplay = *val;
+                }
+            }
+
+            // [inject] — architecture-specific DLL paths.
             if (auto inject = tbl["inject"].as_table()) {
-                if (auto val = (*inject)["enabled"].value<bool>())
-                    snapshot.injection.enabled = *val;
                 if (auto val = (*inject)["library_x86"].value<std::string>())
-                    snapshot.injection.libraryX86 = *val;
+                    snapshot.injectLibraryX86 = *val;
                 if (auto val = (*inject)["library_x64"].value<std::string>())
-                    snapshot.injection.libraryX64 = *val;
+                    snapshot.injectLibraryX64 = *val;
+            }
+
+            // [donate]
+            if (auto donate = tbl["donate"].as_table()) {
+                if (auto v = (*donate)["enabled"].value<bool>())        snapshot.donate.enabled = *v;
+                if (auto v = (*donate)["url"].value<std::string>())     snapshot.donate.url = *v;
+
+                // Clamped rather than trusted: a mistyped 0 here would mean an
+                // unthrottled loop hammering Steam as the signed-in user.
+                auto readClamped = [&](const char* key, uint32_t lo, uint32_t hi, uint32_t& out) {
+                    auto v = (*donate)[key].value<int64_t>();
+                    if (!v) return;
+                    if (*v < lo || *v > hi) {
+                        LOG_WARN("[donate] {} = {} out of range [{}, {}], keeping {}",
+                                 key, *v, lo, hi, out);
+                        return;
+                    }
+                    out = static_cast<uint32_t>(*v);
+                };
+                readClamped("interval_secs",        30,  86400, snapshot.donate.intervalSecs);
+                readClamped("max_mints_per_cycle",   1,    500, snapshot.donate.maxMintsPerCycle);
+                readClamped("min_mint_interval_ms",  0,  60000, snapshot.donate.minMintIntervalMs);
+                readClamped("max_mints_per_session", 0, 100000, snapshot.donate.maxMintsPerSession);
+                readClamped("wanted_refresh_secs",  30,  86400, snapshot.donate.wantedRefreshSecs);
+            }
+
+            // [[inject]]
+            if (auto arr = tbl["inject"].as_array()) {
+                std::filesystem::path steamDir = std::filesystem::path(configPath).parent_path();
+                for (auto& node : *arr) {
+                    auto t = node.as_table();
+                    if (!t) continue;
+                    auto path = (*t)["path"].value<std::string>();
+                    if (!path || path->empty()) continue;
+
+                    // Bare names resolve next to steam.exe.
+                    std::filesystem::path full = *path;
+                    if (full.is_relative()) full = steamDir / full;
+                    if (!std::filesystem::exists(full)) {
+                        LOG_WARN("inject dll not found: {}", full.string());
+                        continue;
+                    }
+
+                    InjectDll dll;
+                    dll.path = full.string();
+                    if (auto val = (*t)["when_cmdline"].value<std::string>()) dll.whenCmdline = *val;
+                    if (auto val = (*t)["all_games"].value<bool>())           dll.allGames   = *val;
+                    if (auto ids = (*t)["when_appids"].as_array())
+                        for (auto& id : *ids)
+                            if (auto v = id.value<int64_t>()) dll.whenAppids.insert(static_cast<AppId_t>(*v));
+                    snapshot.injectDlls.push_back(std::move(dll));
+                }
             }
 
             // [cloud]
@@ -168,12 +256,12 @@ namespace {
 
             ApplyManifestProvider(snapshot.manifestProvider);
             LoadResult result = ApplySnapshotLocked(snapshot);
-            LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_template={}",
+            LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
                      ToString(snapshot.logLevel),
                      (uint32_t)snapshot.luaPaths.size(),
                      snapshot.statsEnableApi,
-                     snapshot.remoteUrlTemplate.empty() ? "<default>" : snapshot.remoteUrlTemplate);
+                     (uint32_t)snapshot.remoteUrlTemplates.size());
             return result;
 
         } catch (const toml::parse_error& e) {
@@ -222,23 +310,24 @@ namespace {
         return luaPaths;
     }
 
-    std::string GetRemoteUrlTemplate() {
+    std::vector<std::string> GetRemoteUrlTemplates() {
         std::lock_guard lock(g_mutex);
-        return remoteUrlTemplate;
-    }
-
-    InjectionSettings GetInjectionSettings() {
-        std::lock_guard lock(g_mutex);
-        return {
-            injectEnabled,
-            injectLibraryX86,
-            injectLibraryX64,
-        };
+        return remoteUrlTemplates;
     }
 
     bool GetStatsEnableApi() {
         std::lock_guard lock(g_mutex);
         return statsEnableApi;
+    }
+
+    DonateSettings GetDonateSettings() {
+        std::lock_guard lock(g_mutex);
+        return donate;
+    }
+
+    bool GetUpdateEnabled() {
+        std::lock_guard lock(g_mutex);
+        return updateEnabled;
     }
 
     CloudSettings GetCloudSettings() {
@@ -247,6 +336,26 @@ namespace {
             cloudEnabled,
             cloudLibrary,
         };
+    }
+
+    std::string GetRemoteOrder() {
+        std::lock_guard lock(g_mutex);
+        return remoteOrder;
+    }
+
+    bool GetPresenceBroadcastEnabled() {
+        std::lock_guard lock(g_mutex);
+        return presenceDisplay != "none";
+    }
+
+    std::string GetInjectLibraryX86() {
+        std::lock_guard lock(g_mutex);
+        return injectLibraryX86;
+    }
+
+    std::string GetInjectLibraryX64() {
+        std::lock_guard lock(g_mutex);
+        return injectLibraryX64;
     }
 
 }
