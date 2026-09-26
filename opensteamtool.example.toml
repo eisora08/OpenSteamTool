@@ -85,10 +85,10 @@ enabled = true
 enable_api = true
 
 [update]
-# Check for a newer OpenSteamTool (fork) build on startup. When a newer build is
-# found it is downloaded, verified (SHA-256) and staged next to Steam; the new
-# DLL loads on the next Steam launch. Set to false to disable the check entirely.
-enabled = true
+# Check for a newer build on startup. When a newer build is found it is
+# downloaded, verified (SHA-256) and staged next to Steam; the new DLL loads on
+# the next Steam launch. Off by default: local builds never replace themselves.
+enabled = false
 
 # Additional Lua config directories (optional).
 # Files are loaded after the default <Steam>/config/stplug-in folder.

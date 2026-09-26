@@ -9,6 +9,10 @@ REM Configurable build options
 REM   GENERATOR  - CMake generator (default: auto-detect)
 REM   ARCH       - Architecture for multi-config generators (default: x64)
 REM   CONFIGS    - Configurations to build, space-separated (default: Release Debug)
+REM
+REM Local builds compile without the self-updater (-DOST_ENABLE_UPDATER=OFF) so a
+REM build you paste next to Steam is never replaced on the next launch. Release
+REM builds published by CI keep it enabled.
 REM ---------------------------------------------------------------------------
 if "%GENERATOR%"=="" (
     where ninja >nul 2>nul
@@ -38,9 +42,9 @@ if not errorlevel 1 (
 echo [INFO] Configuring with generator: %GENERATOR%
 echo "%GENERATOR%" | findstr /I /C:"Visual Studio" >nul
 if not errorlevel 1 (
-    cmake -S src -B build -G "%GENERATOR%" -A %ARCH%
+    cmake -S src -B build -G "%GENERATOR%" -A %ARCH% -DOST_ENABLE_UPDATER=OFF
 ) else (
-    cmake -S src -B build -G "%GENERATOR%"
+    cmake -S src -B build -G "%GENERATOR%" -DOST_ENABLE_UPDATER=OFF
 )
 if errorlevel 1 goto :fail
 
