@@ -53,8 +53,7 @@ namespace {
             }
             pGameID->SetAppID(kOnlineFixAppId);
         } else {
-            g_OnlineFixRealAppId = 0;
-            g_OnlineFixRealAppIdOverride = 0;
+            Hooks_Misc::ResetOnlineFixState();
         }
     }
 
@@ -161,8 +160,22 @@ namespace Hooks_Misc {
     
     AppId_t ResolveAppId() {
         if (g_OnlineFixRealAppIdOverride) return g_OnlineFixRealAppIdOverride;
-        if (g_OnlineFixRealAppId) return g_OnlineFixRealAppId;
-        return GetAppIDForCurrentPipeWrap();
+        const AppId_t pipeAppId = GetAppIDForCurrentPipeWrap();
+        if (pipeAppId == kOnlineFixAppId) {
+            const AppId_t realAppId = g_OnlineFixRealAppId.load(std::memory_order_acquire);
+            if (realAppId != 0) return realAppId;
+        }
+        if (pipeAppId != 0) return pipeAppId;
+        return g_OnlineFixRealAppId.load(std::memory_order_acquire);
+    }
+
+    void ResetOnlineFixState() {
+        const AppId_t oldAppId = g_OnlineFixRealAppId.exchange(0, std::memory_order_release);
+        g_OnlineFixRealAppIdOverride.store(0, std::memory_order_release);
+        g_NetworkingSocketsActive.store(false, std::memory_order_release);
+        if (oldAppId != 0) {
+            LOG_MISC_INFO("ResetOnlineFixState: atomically cleared OnlineFix state (was appid {})", oldAppId);
+        }
     }
 
     bool IsOnlineFixActive() {

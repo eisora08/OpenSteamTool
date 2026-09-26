@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -21,6 +23,7 @@ extern "C" {
 }
 
 namespace LuaConfig{
+    static std::shared_mutex g_configSharedMutex;
     static lua_State* g_lua_state = nullptr;
     static std::atomic<bool> g_hasManifestCodeFunc{false};
     static std::atomic<bool> g_hasManifestCodeFuncEx{false};
@@ -387,6 +390,7 @@ namespace LuaConfig{
             g_fileManifestOverrides[g_currentFile][depotId] = override;
             RebuildManifestOverride(depotId);
         } else {
+            std::unique_lock lock(g_configSharedMutex);
             SetActiveManifestOverride(depotId, override);
         }
         return 0;
@@ -483,6 +487,7 @@ namespace LuaConfig{
         if (!ParseUInt64Decimal(sidStr, &steamId))
             return luaL_error(L, "setStat: steamId must be all digits");
 
+        std::unique_lock lock(g_configSharedMutex);
         StatSteamIdSet[appId] = steamId;
         return 0;
     }
@@ -606,8 +611,12 @@ namespace LuaConfig{
     }
 
     uint64_t GetStatSteamId(AppId_t AppId) {
-        if (StatSteamIdSet.count(AppId))
-            return StatSteamIdSet[AppId];
+        {
+            std::shared_lock lock(g_configSharedMutex);
+            auto it = StatSteamIdSet.find(AppId);
+            if (it != StatSteamIdSet.end())
+                return it->second;
+        }
         uint64_t apiSteamId = 0;
         if (StatsClient::FetchStatSteamId(AppId, &apiSteamId))
             return apiSteamId;
@@ -619,8 +628,9 @@ namespace LuaConfig{
         return it != g_purchaseTime.end() ? it->second : 0;
     }
 
-    const std::unordered_map<uint64_t, ManifestOverride>& GetManifestOverrides() {
-      return ManifestOverrides;
+    std::unordered_map<uint64_t, ManifestOverride> GetManifestOverrides() {
+        std::shared_lock lock(g_configSharedMutex);
+        return ManifestOverrides;
     }
 
     bool HasManifestCodeFunc() {
