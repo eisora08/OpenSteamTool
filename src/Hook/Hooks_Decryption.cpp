@@ -50,7 +50,10 @@ namespace {
             return {};
         }
 
-        std::vector<uint8_t> value(1024);
+        constexpr size_t kInitialBufferSize = 4096;
+        constexpr int32  kMaxSafeBufferSize  = 1024 * 1024; // 1MB safe ceiling
+
+        std::vector<uint8_t> value(kInitialBufferSize);
         int32 result = oConfigStoreGetBinary(g_pConfigStoreLocal, k_EConfigStoreUserLocal,
                                              keyName.c_str(),
                                              reinterpret_cast<char*>(value.data()),
@@ -61,9 +64,23 @@ namespace {
         }
 
         if (result > static_cast<int32>(value.size())) {
-            LOG_DECRYPTIONKEY_WARN("GetConfigStoreLocalBinary: returned size {} exceeds buffer {} for KeyName='{}'",
-                                   result, value.size(), keyName);
-            return {};
+            if (result > kMaxSafeBufferSize) {
+                LOG_DECRYPTIONKEY_WARN("GetConfigStoreLocalBinary: requested size {} exceeds maximum safe limit {} for KeyName='{}'",
+                                       result, kMaxSafeBufferSize, keyName);
+                return {};
+            }
+            LOG_DECRYPTIONKEY_DEBUG("GetConfigStoreLocalBinary: buffer truncated ({}/{}), resizing and retrying for KeyName='{}'",
+                                   value.size(), result, keyName);
+            value.resize(static_cast<size_t>(result));
+            result = oConfigStoreGetBinary(g_pConfigStoreLocal, k_EConfigStoreUserLocal,
+                                           keyName.c_str(),
+                                           reinterpret_cast<char*>(value.data()),
+                                           static_cast<uint32>(value.size()));
+            if (result <= 0 || result > static_cast<int32>(value.size())) {
+                LOG_DECRYPTIONKEY_WARN("GetConfigStoreLocalBinary: retry failed or returned invalid size {} for KeyName='{}'",
+                                       result, keyName);
+                return {};
+            }
         }
 
         value.resize(static_cast<size_t>(result));

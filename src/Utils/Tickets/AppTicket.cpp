@@ -72,6 +72,12 @@ namespace AppTicket {
                 ticket.steamIdOffset = kAppTicketSteamIdOffset;
                 ticket.signatureOffset = *reinterpret_cast<const uint32*>(ticket.data.data());
                 ticket.signatureSize = kAppTicketSignatureSize;
+                if (ticket.signatureOffset > ticket.totalSize ||
+                    ticket.signatureSize > (ticket.totalSize - ticket.signatureOffset)) {
+                    LOG_WARN("AppTicket: corrupted signature bounds for appId={}, sigOffset={}, sigSize={}, totalSize={}",
+                             appId, ticket.signatureOffset, ticket.signatureSize, ticket.totalSize);
+                    return false;
+                }
                 return true;
             }
         }
