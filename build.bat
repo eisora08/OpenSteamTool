@@ -21,6 +21,20 @@ if "%GENERATOR%"=="" (
 if "%ARCH%"=="" set "ARCH=x64"
 if "%CONFIGS%"=="" set "CONFIGS=Release Debug"
 
+REM Where the tools live, as a cmake --build target directory. The tools are
+REM add_subdirectory'd with EXCLUDE_FROM_ALL, so under the Visual Studio
+REM generator they are not part of the top-level solution: cmake resolves the
+REM target to <build>\extract_tickets.vcxproj, which does not exist, and
+REM MSBuild fails with MSB1009. The tools have their own solution in
+REM build\tools, so build them from there. Ninja keeps every target in a single
+REM build tree, so the top-level directory works as-is.
+echo "%GENERATOR%" | findstr /I /C:"Visual Studio" >nul
+if not errorlevel 1 (
+    set "TOOLS_BUILD_DIR=build\tools"
+) else (
+    set "TOOLS_BUILD_DIR=build"
+)
+
 echo [INFO] Configuring with generator: %GENERATOR%
 echo "%GENERATOR%" | findstr /I /C:"Visual Studio" >nul
 if not errorlevel 1 (
@@ -38,7 +52,7 @@ for %%C in (%CONFIGS%) do (
     REM extract_tickets is EXCLUDE_FROM_ALL, so build it explicitly. It lands in
     REM build\tools\%%C\ rather than the shipped output directory.
     echo [INFO] Building tool extract_tickets for %%C
-    cmake --build build --config %%C --target extract_tickets
+    cmake --build !TOOLS_BUILD_DIR! --config %%C --target extract_tickets
     if errorlevel 1 goto :fail
 )
 
