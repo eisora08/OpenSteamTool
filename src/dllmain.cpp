@@ -131,7 +131,7 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
             if (!AppUpdater::DownloadAndStage(upd, self)) return 0;
 
             const bool restart = OSTPlatform::Dialog::ShowConfirm(
-                "BetterSteamTools Updated!",
+                "OpenSteamTool (fork) Updated!",
                 upd.oldVersion + " -> " + upd.newVersion +
                 "\n\nRestart Steam now to apply?");
             if (restart) AppUpdater::RestartSteam();

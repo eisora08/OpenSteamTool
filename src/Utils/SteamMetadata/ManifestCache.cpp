@@ -27,7 +27,7 @@ namespace {
     // ── Source URLs ───────────────────────────────────────────────
     // Source 1: ManifestHub3 on GitHub (primary, community-maintained)
     constexpr const char* kGitHubRawBase = "https://raw.githubusercontent.com/steamtools-games/ManifestHub3";
-    // Source 2: OST Archive (BetterSteamTools)
+    // Source 2: OST Archive (hosted at manifest.luastools.xyz)
     constexpr const char* kOstArchiveBase = "https://manifest.luastools.xyz";
 
     // Real manifests reach ~19 MB; 64 MB leaves generous headroom while still

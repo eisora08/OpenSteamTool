@@ -87,5 +87,5 @@ jobs:
       - name: Purge jsDelivr cache for pointer
         shell: bash
         run: |
-          curl -s "https://purge.jsdelivr.net/gh/madoiscool/BetterSteamTools@updates/opensteamtool/latest.toml" \
+          curl -s "https://purge.jsdelivr.net/gh/eisora08/OpenSteamTool@updates/opensteamtool/latest.toml" \
             >/dev/null || echo "jsDelivr purge failed (non-fatal)."

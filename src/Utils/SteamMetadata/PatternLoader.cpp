@@ -160,7 +160,7 @@ static void ShowDownloadFailedPopup(const std::string& dllName,
         "  3. Check upstream:\n"
         "       https://github.com/madoiscool/steam-monitor/tree/pattern/" + component + "\n"
         "  4. Report the diagnostics below:\n"
-        "       https://github.com/madoiscool/BetterSteamTools/issues");
+        "       https://github.com/eisora08/OpenSteamTool/issues");
 }
 
 } // namespace
@@ -285,7 +285,7 @@ void ReportMissingFunctions()
         list +
         "\nHooks for these functions are disabled for this session.\n\n"
         "Please report this at:\n"
-        "https://github.com/madoiscool/BetterSteamTools/issues");
+        "https://github.com/eisora08/OpenSteamTool/issues");
 }
 
 } // namespace PatternLoader
