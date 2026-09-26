@@ -124,6 +124,13 @@ void ReloadConfig() {
 }
 
 void WatcherThread() {
+    // If this thread exits on any path without clearing g_running, Start()
+    // would refuse every later attempt for the life of the process.
+    struct RunningGuard {
+        std::atomic<bool>& flag;
+        ~RunningGuard() { flag.store(false, std::memory_order_release); }
+    } runningGuard{g_running};
+
     const std::filesystem::path configPath(g_configPath);
     const std::filesystem::path dirPath = configPath.parent_path();
     const std::string targetFileName = configPath.filename().string();

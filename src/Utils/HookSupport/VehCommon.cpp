@@ -2,11 +2,14 @@
 
 #include "OSTPlatform/include/Memory.h"
 
+#include <shared_mutex>
+
 #if defined(_WIN32)
 #include <windows.h>
 #endif
 
 namespace {
+    std::shared_mutex g_sitesMutex;
     std::vector<VehCommon::Int3Site> g_sites;
     OSTPlatform::Trap::HandlerHandle g_vehHandle = nullptr;
 }
@@ -34,15 +37,20 @@ static void RestoreByte(void* target, uint8_t original) {
 
 void Arm(Int3Site site) {
     EnsureHandlerInstalled();
-    g_sites.push_back(site);
+    {
+        std::unique_lock lock(g_sitesMutex);
+        g_sites.push_back(site);
+    }
     ArmInt3(site.target);
 }
 
 bool HasSites() {
+    std::shared_lock lock(g_sitesMutex);
     return !g_sites.empty();
 }
 
 bool OnBreakpoint(OSTPlatform::Trap::Context& ctx) {
+    std::shared_lock lock(g_sitesMutex);
     for (auto& site : g_sites) {
         if (!site.target || !IsAt(ctx.InstructionPointer(), site.target)) continue;
 
@@ -65,6 +73,7 @@ bool OnBreakpoint(OSTPlatform::Trap::Context& ctx) {
 }
 
 bool OnSingleStep(OSTPlatform::Trap::Context& ctx) {
+    std::shared_lock lock(g_sitesMutex);
     for (auto& site : g_sites) {
         if (!site.persistent || !site.target) continue;
         if (!IsPostInt3Step(ctx.InstructionPointer(), site.target)) continue;
@@ -96,13 +105,6 @@ static void SafeRestoreSite(uint8_t* target, uint8_t originalByte) {
 }
 #endif
 
-void DisarmAll() {
-    for (auto& site : g_sites) {
-        SafeRestoreSite(site.target, site.originalByte);
-    }
-    g_sites.clear();
-}
-
 void RemoveHandler() {
     if (g_vehHandle) {
         OSTPlatform::Trap::RemoveVectoredHandler(g_vehHandle);
@@ -110,4 +112,14 @@ void RemoveHandler() {
     }
 }
 
+void DisarmAll() {
+    RemoveHandler();
+    std::unique_lock lock(g_sitesMutex);
+    for (auto& site : g_sites) {
+        SafeRestoreSite(site.target, site.originalByte);
+    }
+    g_sites.clear();
+}
+
 } // namespace VehCommon
+
