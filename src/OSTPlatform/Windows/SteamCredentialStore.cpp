@@ -5,6 +5,9 @@
 #include "include/Encoding.h"
 #include "Windows/Handles.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <utility>

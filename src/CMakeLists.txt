@@ -31,6 +31,9 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
+# Keep the Windows min/max macros from clobbering std::min/std::max.
+add_compile_definitions(NOMINMAX)
+
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenSteamToolBuildInfo.h.in"
