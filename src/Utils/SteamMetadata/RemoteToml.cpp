@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include <windows.h>
+
 namespace RemoteToml {
 
 namespace {
@@ -137,12 +139,39 @@ Result Fetch(const Request& request)
 
     // 4. Remote OK → write cache, return body.
     if (http.ok && http.status == 200 && !http.body.empty()) {
-        std::ofstream ofs(cachePath, std::ios::binary);
-        if (ofs) {
-            ofs.write(http.body.data(),
-                      static_cast<std::streamsize>(http.body.size()));
-            LOG_INFO("RemoteToml({}/{}): cached to {}",
-                     request.channel, request.component, cachePathText);
+        // Write to a process/thread-unique temp file first and rename it into
+        // place so concurrent readers never see a partially written cache entry.
+        fs::path tempPath = cacheDir / (out.sha256 + ".tmp." +
+                                        std::to_string(::GetCurrentProcessId()) + "." +
+                                        std::to_string(::GetCurrentThreadId()));
+        bool writeOk = false;
+        {
+            std::ofstream ofs(tempPath, std::ios::binary);
+            if (ofs) {
+                ofs.write(http.body.data(),
+                          static_cast<std::streamsize>(http.body.size()));
+                ofs.flush();
+                writeOk = ofs.good();
+            }
+        }
+
+        if (writeOk) {
+            if (MoveFileExW(tempPath.c_str(), cachePath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                LOG_INFO("RemoteToml({}/{}): cached to {}",
+                         request.channel, request.component, cachePathText);
+            } else {
+                std::error_code renameEc;
+                fs::rename(tempPath, cachePath, renameEc);
+                if (!renameEc) {
+                    LOG_INFO("RemoteToml({}/{}): cached to {}",
+                             request.channel, request.component, cachePathText);
+                } else {
+                    LOG_WARN("RemoteToml({}/{}): atomic cache rename failed: {}",
+                             request.channel, request.component, renameEc.message());
+                    std::error_code rmEc;
+                    fs::remove(tempPath, rmEc);
+                }
+            }
         } else {
             LOG_WARN("RemoteToml({}/{}): could not open {} for writing",
                      request.channel, request.component, cachePathText);

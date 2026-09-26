@@ -50,6 +50,7 @@ namespace Config {
     bool GetPresenceBroadcastEnabled();
     std::string GetInjectLibraryX86();
     std::string GetInjectLibraryX64();
+    std::vector<InjectDll> GetInjectDlls();
 
     // [donate] — contribute manifest request codes for depots this account owns.
     struct DonateSettings {

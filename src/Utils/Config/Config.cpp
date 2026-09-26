@@ -358,4 +358,9 @@ namespace {
         return injectLibraryX64;
     }
 
+    std::vector<InjectDll> GetInjectDlls() {
+        std::lock_guard lock(g_mutex);
+        return injectDlls;
+    }
+
 }

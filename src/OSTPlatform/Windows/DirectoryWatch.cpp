@@ -35,9 +35,17 @@ struct Watch::Impl {
     std::vector<char> buffer;
     bool readPending = false;
 
+    ~Impl() {
+        Close();
+    }
+
     void Close() {
         if (dir) {
-            CancelIo(dir.get());
+            if (readPending) {
+                CancelIo(dir.get());
+                DWORD dummy = 0;
+                GetOverlappedResult(dir.get(), &overlapped, &dummy, TRUE);
+            }
         }
         dir.Reset();
         event.Reset();

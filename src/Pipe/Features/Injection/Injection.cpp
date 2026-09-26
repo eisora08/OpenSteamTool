@@ -49,11 +49,12 @@ namespace {
 } // namespace
 
 void Apply(const PipeContext& ctx) {
+    const auto injectDlls = Config::GetInjectDlls();
     if (!ctx.gameProcess) return;
 
     // If no explicit [[inject]] entries exist, try auto-inject from
     // [inject] library_x86 / library_x64 based on process architecture.
-    if (Config::injectDlls.empty()) {
+    if (injectDlls.empty()) {
         const auto arch = OSTPlatform::RemoteProcess::GetArchitecture(ctx.process.pid);
         std::string autoPath;
         if (arch == OSTPlatform::RemoteProcess::Architecture::X86)
@@ -90,7 +91,7 @@ void Apply(const PipeContext& ctx) {
         return cmdLine;
     };
 
-    for (const auto& dll : Config::injectDlls) {
+    for (const auto& dll : injectDlls) {
         const std::optional<std::string>& cmd = dll.whenCmdline.empty() ? cmdLine : commandLine();
         if (!Matches(dll, ctx, cmd)) continue;
         if (!ClaimInjection({ctx.process, dll.path})) continue;
