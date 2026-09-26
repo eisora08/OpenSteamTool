@@ -166,19 +166,35 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
         DisableThreadLibraryCalls(hModule);
         if (!IsSteamHost())
             return TRUE;   // e.g. rundll32 bst:// handler — no injection here
+
+        // Keep this module pinned so explicit FreeLibrary cannot unload code
+        // while hooks and worker threads may still reference it.
+        HMODULE pinnedModule = nullptr;
+        GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCSTR>(&DllMain), &pinnedModule);
+
         // Hand off all real work to a worker thread to avoid running file I/O,
         // module loading and detour transactions under the loader lock.
         OSTPlatform::Thread::StartDetached([module = reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(hModule)] {
             return InitThread(module);
         });
     }
-    else if (dwReason == DLL_PROCESS_DETACH && IsSteamHost())
+    else if (dwReason == DLL_PROCESS_DETACH)
     {
-        ConfigFileWatcher::Stop();
-        LuaFileWatcher::Stop();
-        SteamUI::CoreUnhook();
-        SteamClient::CoreUnhook();
-        CloudRedirectHost::Shutdown();
+        // DllMain runs under loader lock. During process termination
+        // (pvReserved != nullptr) the OS has already terminated every other
+        // thread, so a join() on a watcher thread or a Detours transaction
+        // here can deadlock Steam on shutdown. Tear down only on an explicit
+        // FreeLibrary, and never on the rundll32 host.
+        if (pvReserved == nullptr && IsSteamHost())
+        {
+            ConfigFileWatcher::Stop();
+            LuaFileWatcher::Stop();
+            SteamUI::CoreUnhook();
+            SteamClient::CoreUnhook();
+            CloudRedirectHost::Shutdown();
+        }
     }
 
     return TRUE;
