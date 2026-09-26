@@ -9,12 +9,11 @@ level = "debug"
 
 [manifest]
 # Which upstream API to query for depot manifest request codes.
-#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}   (default)
+#   "manifestdex"   → https://manifest.manifestdex.com/{gid}     (default)
+#   "opensteamtool" → https://manifest.opensteamtool.com/{gid}
 #   "wudrm"         → http://gmrc.wudrm.com/manifest/{gid} (recommended for China users)
 #   "steamrun"      → https://manifest.steam.run/api/manifest/{gid}
-#   "20770407"      → https://20770407.xyz/manifest/{depot}/{gid}  (requires depotId)
-#   "manifestdex"   → https://manifest.manifestdex.com/{gid}       (with User-Agent)
-# If <Steam>/config/stplug-in/manifest.lua defines fetch_manifest_code(gid) or
+# If <Steam>/config/lua/manifest.lua defines fetch_manifest_code(gid) or
 # fetch_manifest_code_ex(app_id, depot_id, gid), those Lua functions take
 # priority over the url setting below.
 #
@@ -46,7 +45,7 @@ level = "debug"
 #     end
 #     return nil
 # end
-url = "opensteamtool"
+url = "manifestdex"
 
 # HTTP timeouts for manifest requests (milliseconds).
 # timeout_resolve_ms  — DNS resolution        (default: 5000)
@@ -86,7 +85,7 @@ enabled = true
 enable_api = true
 
 [update]
-# Check for a newer BetterSteamTools build on startup. When a newer build is
+# Check for a newer OpenSteamTool (fork) build on startup. When a newer build is
 # found it is downloaded, verified (SHA-256) and staged next to Steam; the new
 # DLL loads on the next Steam launch. Set to false to disable the check entirely.
 enabled = true
