@@ -48,8 +48,6 @@ namespace {
     uint32 g_cbNewHdr    = 0;
     bool   g_NeedReplaceBody = false;
     bool   g_NeedReplaceHdr  = false;
-    bool   g_ResizedInPlace = false;
-    uint32 g_NewBodySize    = 0;
     uint8  g_RecvPacketPool[kPacketPoolSize][kMaxPacketSize];
     int    g_RecvPacketPoolIdx = 0;
 
@@ -455,12 +453,12 @@ namespace Hooks_NetPacket_UserStats {
         }
 
         resp.clear_stats();
-        g_NewBodySize = static_cast<uint32>(resp.ByteSizeLong());
-        if (!resp.SerializeToArray(const_cast<uint8*>(pBody), cbBody)){
+        g_cbNewBody = static_cast<uint32>(resp.ByteSizeLong());
+        if (g_cbNewBody > kMaxBodySize || !resp.SerializeToArray(g_NewBody, kMaxBodySize)) {
             LOG_ACHIEVEMENT_WARN("Player::GetUserStats response: failed to SerializeToArray modified response");
             return;
         }
-        g_ResizedInPlace = true;
+        g_NeedReplaceBody = true;
 
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: modified body:\n{}", resp.DebugString());
     }
@@ -1544,7 +1542,7 @@ namespace Hooks_NetPacket_OnlineFix {
             LOG_ONLINEFIX_WARN("OnlineFix: encoded size {} exceeds buffer", g_cbSendNewBody);
             return false;
         }
-        if (!msg.SerializeToArray(g_SendNewBody, kMaxBodySize)) {
+        if (!msg.SerializeToArray(g_SendNewBody, static_cast<int>(sizeof(g_SendNewBody)))) {
             LOG_ONLINEFIX_WARN("OnlineFix: failed to SerializeToArray");
             return false;
         }
@@ -1611,7 +1609,7 @@ namespace Hooks_NetPacket_Cloud {
             case 2: {
                 uint64 len;
                 if (!ReadVarint(d, size, pos, len)) return false;
-                if (pos + len > size) return false;
+                if (len > size - pos) return false;
                 pos += static_cast<uint32>(len);
                 break;
             }
@@ -1919,6 +1917,7 @@ namespace {
                         const uint8* pBody, uint32 cbBody,
                         const uint8* pHdr, uint32 cbHdr)
     {
+        if (!targetJobName) return;
         LOG_NETPACKET_DEBUG("Recv target_job_name: {}", targetJobName);
         g_NeedReplaceBody = false;
         g_NeedReplaceHdr  = false;
@@ -2080,6 +2079,10 @@ namespace {
         if (!pPacket) return oRecvPkt(pThis, pPacket);
         if (!NetPkt::IsResolved() && !TryResolveLayout(pPacket))
             return oRecvPkt(pThis, pPacket);
+        // Only after the layout is known: Data() is the trap sink while it is
+        // unresolved, so testing it earlier would gate out the probe itself.
+        // A packet whose buffer never got allocated has nothing to unpack.
+        if (!NetPkt::Data(pPacket)) return oRecvPkt(pThis, pPacket);
 
         Hooks_NetPacket_RichPresence::TryInject(
             pThis, pPacket,
@@ -2098,17 +2101,9 @@ namespace {
         uint32 cbBody, cbHdr;
         if (UnpackRaw(NetPkt::Data(pPacket), NetPkt::Size(pPacket),
                      eMsg, pHdr, cbHdr, pBody, cbBody)) {
-            g_ResizedInPlace = false;
             RecvJob(eMsg, pBody, cbBody, pHdr, cbHdr);
 
-            if (g_ResizedInPlace && g_NeedReplaceHdr) {
-                // Body shrunk in-place + header changed -> full replace via pool
-                ReplaceRecvPacket(pPacket,
-                    g_NewHdr, g_cbNewHdr,
-                    pBody, g_NewBodySize);
-            } else if (g_ResizedInPlace) {
-                NetPkt::Size(pPacket) = sizeof(MsgHdr) + cbHdr + g_NewBodySize;
-            } else if (g_NeedReplaceHdr || g_NeedReplaceBody) {
+            if (g_NeedReplaceHdr || g_NeedReplaceBody) {
                 ReplaceRecvPacket(pPacket,
                     g_NeedReplaceHdr  ? g_NewHdr  : pHdr,
                     g_NeedReplaceHdr  ? g_cbNewHdr : cbHdr,

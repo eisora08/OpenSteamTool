@@ -2,6 +2,10 @@
 
 #include "OSTPlatform/include/Memory.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 namespace {
     std::vector<VehCommon::Int3Site> g_sites;
     OSTPlatform::Trap::HandlerHandle g_vehHandle = nullptr;
@@ -70,11 +74,31 @@ bool OnSingleStep(OSTPlatform::Trap::Context& ctx) {
     return false;
 }
 
+// DisarmAll() runs while modules are being torn down: site.target can already
+// point into an image that is no longer mapped, and the dereference below would
+// fault instead of merely failing to restore. Probe it under SEH so an unhook
+// is best-effort rather than fatal.
+#if defined(_WIN32)
+static void SafeRestoreSite(uint8_t* target, uint8_t originalByte) {
+    __try {
+        if (target && *target == 0xCC) {
+            RestoreByte(target, originalByte);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Module might already be unmapped, safely ignore
+    }
+}
+#else
+static void SafeRestoreSite(uint8_t* target, uint8_t originalByte) {
+    if (target && *target == 0xCC) {
+        RestoreByte(target, originalByte);
+    }
+}
+#endif
+
 void DisarmAll() {
     for (auto& site : g_sites) {
-        if (site.target && *site.target == 0xCC) {
-            RestoreByte(site.target, site.originalByte);
-        }
+        SafeRestoreSite(site.target, site.originalByte);
     }
     g_sites.clear();
 }

@@ -206,19 +206,29 @@ namespace {
 
         bool result = oCheckAppOwnership(pObj, appId, pOwn);
         TryInitFakeLicenseOnce();
+        // Drain any license refresh requested while the fake package was being
+        // built; CheckAppOwnership is the Steam thread that owns these calls.
+        TryProcessPendingLicenseRefresh();
         Hooks_Package::TryDumpOwnedDepots();
 
         if (LuaConfig::HasDepot(appId,false)) {
-            if (result && pOwn->ExistInPackageNums > 1) {
-                // Actually owned — record so HasDepot excludes it going forward
-                LuaConfig::MarkOwned(appId);
-                pOwn->ReleaseState = EAppReleaseState::Released;
+            if (pOwn) {
+                if (result && pOwn->ExistInPackageNums > 1) {
+                    // Actually owned — record so HasDepot excludes it going forward
+                    LuaConfig::MarkOwned(appId);
+                    pOwn->ReleaseState = EAppReleaseState::Released;
+                } else {
+                    pOwn->PackageId    = kInjectedPackageId;
+                    pOwn->ReleaseState = EAppReleaseState::Released;
+                    pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
+                    // Setting this free flag to false will hide it from the library UI.
+                    pOwn->bFreeLicense = false;
+                    return true;
+                }
             } else {
-                pOwn->PackageId    = kInjectedPackageId;
-                pOwn->ReleaseState = EAppReleaseState::Released;
-                pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
-                // Setting this free flag to false will hide it from the library UI.
-                pOwn->bFreeLicense = false;
+                // Steam can call us with a null output struct; claim ownership
+                // anyway (HasDepot already said this appid is configured) rather
+                // than dereferencing it.
                 return true;
             }
         }

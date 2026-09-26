@@ -25,6 +25,12 @@ if(NOT WIN32)
     return()
 endif()
 
+# Source files and comments carry non-ASCII literals; without this MSVC picks
+# the system codepage and misreads them (and C4819 warnings follow).
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenSteamToolBuildInfo.h.in"

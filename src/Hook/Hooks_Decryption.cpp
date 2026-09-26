@@ -30,7 +30,7 @@ namespace {
                     return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, Key, KeySize);
                 }
                 if (const auto& key = LuaConfig::GetDecryptionKey(depotId); !key.empty()) {
-                    if (KeySize >= key.size()) {
+                    if (Key && KeySize >= key.size()) {
                         LOG_DECRYPTIONKEY_INFO("Providing decryption key for depot {}: {}", depotId,
                                                spdlog::to_hex(key.data(), key.data() + key.size()));
                         memcpy(Key, key.data(), key.size());

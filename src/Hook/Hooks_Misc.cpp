@@ -2,6 +2,7 @@
 #include "HookMacros.h"
 #include "Utils/HookSupport/VehCommon.h"
 #include "dllmain.h"
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 
@@ -208,8 +209,12 @@ namespace Hooks_Misc {
             char buf[256] = {};
             int64 len = oGetAppDataFromAppInfo(g_pCAppInfoCache, appId, "common/name",
                 reinterpret_cast<uint8*>(buf), sizeof(buf));
-            if (len > 1)
-                name.assign(buf, static_cast<size_t>(len - 1));
+            if (len > 1) {
+                // Steam may report a length beyond the buffer it was given;
+                // clamp so name.assign() cannot read past buf.
+                const size_t copyLen = (std::min)(static_cast<size_t>(len - 1), sizeof(buf) - 1);
+                name.assign(buf, copyLen);
+            }
         }
 
         LOG_MISC_DEBUG("GetGameNameByAppID({}): {}", appId, name);
