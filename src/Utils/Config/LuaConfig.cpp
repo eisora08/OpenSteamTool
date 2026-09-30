@@ -75,11 +75,17 @@ namespace LuaConfig{
         return OSTPlatform::Numbers::ParseHexUInt8(text).value_or(0);
     }
 
+    // Writers to ManifestOverrides take g_configSharedMutex here; readers
+    // (GetManifestOverrides, GetStatSteamId) take it shared. The lock lives in
+    // these two so every path — ParseFile, UnloadFile, the file watcher's
+    // hot-reload — is covered.
     static void SetActiveManifestOverride(uint64_t depotId, const ManifestOverride& override) {
+        std::unique_lock lock(g_configSharedMutex);
         ManifestOverrides[depotId] = override;
     }
 
     static void ClearActiveManifestOverride(uint64_t depotId) {
+        std::unique_lock lock(g_configSharedMutex);
         ManifestOverrides.erase(depotId);
     }
 
@@ -390,7 +396,7 @@ namespace LuaConfig{
             g_fileManifestOverrides[g_currentFile][depotId] = override;
             RebuildManifestOverride(depotId);
         } else {
-            std::unique_lock lock(g_configSharedMutex);
+            // SetActiveManifestOverride takes the lock itself.
             SetActiveManifestOverride(depotId, override);
         }
         return 0;

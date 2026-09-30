@@ -20,4 +20,10 @@ namespace Hooks_SteamUI {
     // own app id can't be checked directly because a game's DLC depots carry the
     // DLC app id while only the base game is marked downloading.
     size_t ActiveDownloadCount();
+
+    // True while Steam is doing update work (downloading, staging, verifying,
+    // paused mid-update, ...) for appId — or for its base game when appId is
+    // DLC. Fed from FillInAppOverview; safe from any thread. Used to keep the
+    // depot targets we hand Steam stable for the duration of an update.
+    bool IsAppUpdating(AppId_t appId);
 }

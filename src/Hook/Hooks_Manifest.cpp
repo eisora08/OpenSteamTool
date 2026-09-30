@@ -1,5 +1,6 @@
 #include "Hooks_Manifest.h"
 #include "HookMacros.h"
+#include "Hooks_SteamUI.h"
 #include "dllmain.h"
 #include "OSTPlatform/include/Thread.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
@@ -50,6 +51,18 @@ namespace {
     struct DepotSeen { AppId_t appId; uint64 gid; };
     std::unordered_map<uint32, DepotSeen> g_depotsSeen;
     std::mutex g_depotsSeenMutex;
+
+    // Per-app snapshot of the depot targets we handed Steam while its update
+    // was in flight. The first BuildDepotDependency during an update captures
+    // what was delivered (override applied); later passes serve the snapshot
+    // back, so a pin added or removed mid-download cannot retarget an update
+    // that is already running (pausing one mid-flight is what used to leave
+    // the app stuck). Cleared as soon as a pass runs with no update active,
+    // where the live values apply again.
+    // appId -> depotId -> (gid, size).
+    std::mutex g_updateTargetMutex;
+    std::unordered_map<AppId_t,
+        std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>> g_updateTargets;
 
     void RecordDepots(const CUtlVector<DepotEntry>* vec) {
         if (!vec) return;
@@ -177,10 +190,52 @@ namespace {
 
         const auto& overrides = LuaConfig::GetManifestOverrides();
 
-        // Apply manifest overrides in place (only depots a lua explicitly pins).
-        if (!overrides.empty() && pDepotInfo && pDepotInfo->m_Size) {
+        // Snapshot the targets on the first pass with an update in flight, and
+        // drop it once a pass runs with no update active. The lock is held for
+        // the whole pass below: `held` points into g_updateTargets. Taken for
+        // any app, not only pinned ones — removing the last pin mid-update
+        // must still serve the target the update started with.
+        std::unique_lock<std::mutex> targetLock =
+            std::unique_lock<std::mutex>(g_updateTargetMutex);
+        const bool updating = Hooks_SteamUI::IsAppUpdating(AppId);
+        std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>* held = nullptr;
+        {
+            auto it = g_updateTargets.find(AppId);
+            if (updating)
+            {
+                if (it == g_updateTargets.end())
+                    it = g_updateTargets.emplace(AppId,
+                        std::unordered_map<uint32_t, std::pair<uint64_t, uint64_t>>{}).first;
+                held = &it->second;
+            }
+            else if (it != g_updateTargets.end())
+            {
+                g_updateTargets.erase(it);
+            }
+        }
+
+        if (pDepotInfo && pDepotInfo->m_Size) {
             for (uint32 i = 0; i < pDepotInfo->m_Size; ++i) {
                 DepotEntry& e = pDepotInfo->m_Memory.m_pMemory[i];
+
+                // Update in flight: keep the exact target the update started
+                // with, whatever the overrides say now.
+                if (held) {
+                    auto h = held->find(e.DepotId);
+                    if (h != held->end()) {
+                        if (e.ManifestGid != h->second.first || e.ManifestSize != h->second.second) {
+                            LOG_MANIFEST_INFO("BuildDepotDependency: app {} updating — holding depot {} "
+                                "at gid={} size={} (current target gid={} size={})",
+                                AppId, e.DepotId, h->second.first, h->second.second,
+                                e.ManifestGid, e.ManifestSize);
+                        }
+                        e.ManifestGid  = h->second.first;
+                        e.ManifestSize = h->second.second;
+                        continue;
+                    }
+                }
+
+                // Apply manifest overrides in place (only depots a lua pins).
                 auto it = overrides.find(e.DepotId);
                 if (it != overrides.end()) {
                     // if size=0 in the override, keep the original size(affects download display but not the actual download)
@@ -190,6 +245,14 @@ namespace {
                         e.ManifestSize, newSize);
                     e.ManifestGid  = it->second.gid;
                     e.ManifestSize = newSize;
+                }
+            }
+
+            // Capture what we just delivered as this update's target set.
+            if (held) {
+                for (uint32 i = 0; i < pDepotInfo->m_Size; ++i) {
+                    const DepotEntry& e = pDepotInfo->m_Memory.m_pMemory[i];
+                    (*held)[e.DepotId] = {e.ManifestGid, e.ManifestSize};
                 }
             }
         }
