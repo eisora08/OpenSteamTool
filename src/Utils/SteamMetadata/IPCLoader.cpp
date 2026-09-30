@@ -191,21 +191,23 @@ bool Load(const std::string& steamclientPath)
         return false;
     }
 
-    toml::table root;
+    // Parse and consume inside one try: a malformed body must leave the
+    // registry empty (all-or-nothing) rather than half-populated, since the
+    // only exceptions toml::parse can raise here are parse_error and bad_alloc.
     try {
-        root = toml::parse(r.body);
+        toml::table root = toml::parse(r.body);
+        for (auto& [key, val] : root) {
+            if (!val.is_table()) continue;
+            Interface iface;
+            if (!ParseInterfaceTable(key.str(), *val.as_table(), iface)) continue;
+
+            g_registry.Add(std::move(iface));
+        }
     } catch (const toml::parse_error& e) {
         LOG_WARN("IPCLoader: TOML parse error: {}", e.description());
         ShowMissingPopup(r.sha256);
+        g_registry.Clear();
         return false;
-    }
-
-    for (auto& [key, val] : root) {
-        if (!val.is_table()) continue;
-        Interface iface;
-        if (!ParseInterfaceTable(key.str(), *val.as_table(), iface)) continue;
-
-        g_registry.Add(std::move(iface));
     }
 
     g_registry.BuildIndex();
