@@ -1,6 +1,7 @@
 #include "Pipe/Features/DenuvoAuth/DenuvoAuth.h"
 
 #include "Pipe/Features/DenuvoAuth/ProtectionScan.h"
+#include "Pipe/ProcessInspector.h"
 #include "Utils/Logging/Log.h"
 #include "Utils/Tickets/AppTicket.h"
 #include "Utils/Config/LuaConfig.h"
@@ -145,10 +146,24 @@ namespace {
 
     ProcessAuth* FindAuthForPipe(const PipeKey& pipeKey) {
         const auto pipeIt = g_pipeProcess.find(pipeKey);
-        if (pipeIt == g_pipeProcess.end()) return nullptr;
+        if (pipeIt != g_pipeProcess.end()) {
+            const auto authIt = g_processAuth.find(pipeIt->second);
+            if (authIt != g_processAuth.end()) return &authIt->second;
+        }
 
-        const auto authIt = g_processAuth.find(pipeIt->second);
-        return authIt == g_processAuth.end() ? nullptr : &authIt->second;
+        // Resilient fallback: match by active process if the specific pipe handle
+        // was not handshaked yet or was evicted from g_pipeProcess. The creation
+        // time pins the exact process instance, so a recycled pid cannot resolve
+        // to the previous process's auth.
+        if (pipeKey.pid != 0) {
+            if (const auto currentCreation = ProcessInspector::GetProcessCreationTime(pipeKey.pid)) {
+                const ProcessKey activeKey{pipeKey.pid, *currentCreation};
+                const auto authIt = g_processAuth.find(activeKey);
+                if (authIt != g_processAuth.end()) return &authIt->second;
+            }
+        }
+
+        return nullptr;
     }
 
     void EnsureScanned(ProcessAuth& auth, const ProcessKey& process, AppId_t appId) {

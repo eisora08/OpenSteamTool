@@ -35,6 +35,11 @@ namespace {
         return g_injected.insert(key).second;
     }
 
+    void UnclaimInjection(const InjectedKey& key) {
+        std::scoped_lock lock(g_mutex);
+        g_injected.erase(key);
+    }
+
     bool Matches(const Config::InjectDll& dll, const PipeContext& ctx,
                  const std::optional<std::string>& cmdLine) {
         if (!dll.allGames && !ctx.trackedApp) return false;
@@ -106,6 +111,8 @@ void Apply(const PipeContext& ctx) {
                             ctx.process.pid, ctx.appId,
                             OSTPlatform::RemoteProcess::ToString(status),
                             path.filename().string());
+            // Leave the key unclaimed so a retry can attempt this dll again.
+            UnclaimInjection({ctx.process, dll.path});
         }
     }
 }
