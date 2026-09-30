@@ -15,4 +15,7 @@ add_executable(extract_tickets
     extract_tickets/extract_tickets.cpp
 )
 target_compile_features(extract_tickets PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(extract_tickets PRIVATE /utf-8)
+endif()
 
