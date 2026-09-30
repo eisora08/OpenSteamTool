@@ -616,6 +616,16 @@ namespace LuaConfig{
         return PinnedApps.count(AppId);
     }
 
+    void PrewarmStatSteamId(AppId_t AppId) {
+        if (AppId == k_uAppIdInvalid) return;
+        {
+            std::shared_lock lock(g_configSharedMutex);
+            if (StatSteamIdSet.contains(AppId))
+                return;
+        }
+        StatsClient::PrewarmStatSteamId(AppId);
+    }
+
     uint64_t GetStatSteamId(AppId_t AppId) {
         {
             std::shared_lock lock(g_configSharedMutex);
@@ -624,7 +634,7 @@ namespace LuaConfig{
                 return it->second;
         }
         uint64_t apiSteamId = 0;
-        if (StatsClient::FetchStatSteamId(AppId, &apiSteamId))
+        if (StatsClient::TryGetCachedStatSteamId(AppId, &apiSteamId))
             return apiSteamId;
         return kDefaultStatSteamId;
     }
