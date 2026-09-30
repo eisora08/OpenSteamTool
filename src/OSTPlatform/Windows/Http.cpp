@@ -209,7 +209,11 @@ Result Execute(const wchar_t* method,
                 break;
             }
             r.body.resize(off + read);
-            if (r.body.size() >= maxBodyBytes) break;
+            if (r.body.size() >= maxBodyBytes) {
+                OSTP_LOG_WARN("{} - response body exceeded cap of {} bytes, truncating",
+                              url ? url : "", maxBodyBytes);
+                break;
+            }
         }
 
         if (r.status < 200 || r.status >= 300) {

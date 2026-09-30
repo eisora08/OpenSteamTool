@@ -12,6 +12,8 @@ namespace OSTPlatform::Http {
         bool ok = false;
     };
 
+    constexpr size_t kDefaultMaxResponseBodyBytes = 16 * 1024 * 1024; // 16 MiB
+
     Result Execute(const wchar_t* method,
                    const char* url,
                    const void* reqBody = nullptr,
