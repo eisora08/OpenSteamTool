@@ -8,6 +8,7 @@
 #include "Utils/SteamMetadata/ManifestDonor.h"
 #include "Utils/SteamMetadata/PatternLoader.h"
 #include "Utils/SteamMetadata/SteamDiagnostics.h"
+#include "Utils/Support/AcfSizeRepair.h"
 #include "Utils/Tokeer/TokeerBridge.h"
 #ifdef OST_ENABLE_UPDATER
 #include "Utils/Update/AppUpdater.h"
@@ -108,6 +109,19 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // request. Started after the hooks are in place because it needs the
     // netpacket send path; it idles until the license list resolves anyway.
     ManifestDonor::Start();
+
+    // Fix library entries whose appmanifest SizeOnDisk is stuck at 0 (games
+    // showing "0 B" in the library). Own detached thread: it walks every
+    // install directory on disk and can take seconds. Idempotent, and Steam
+    // only re-reads these files on its next operation, so a restart after
+    // this has run is what refreshes the library view.
+    OSTPlatform::Thread::StartDetached([]() -> uint32_t {
+        const int repaired = AcfSizeRepair::RepairAll(SteamInstallPath);
+        if (repaired > 0)
+            LOG_INFO("AcfSizeRepair: repaired {} appmanifest file(s); restart "
+                     "Steam to refresh the library view", repaired);
+        return 0;
+    });
 
     // Register the bst:// URI scheme so the website can drive code redemption via this
     // DLL (rundll32 handler). HKCU, no admin; idempotent.
