@@ -295,7 +295,6 @@ namespace {
     }
 
     // ── Hash constants for target_job_name dispatch ─────────────
-    constexpr uint32 HASH_JOB_NotifyRunningApps = Fnv1aHash("FamilyGroupsClient.NotifyRunningApps#1");
     constexpr uint32 HASH_JOB_GetUserStats = Fnv1aHash("Player.GetUserStats#1");
     constexpr uint32 HASH_JOB_GetManifestRequestCode = Fnv1aHash("ContentServerDirectory.GetManifestRequestCode#1");
 
@@ -893,9 +892,36 @@ namespace Hooks_NetPacket_OwnershipTicket {
 // ════════════════════════════════════════════════════════════════
 namespace Hooks_NetPacket_FamilySharing {
 
+    // Sanitizes FamilyGroupsClient.NotifyRunningApps RPC notification:
+    // Retains the valid family_groupid while clearing running_apps entries to 0.
+    // Steam client receives a structurally sound RPC message informing it that
+    // 0 apps are currently running, actively clearing library lock state.
+    void HandleRecv_NotifyRunningApps(const uint8* pBody, uint32 cbBody)
+    {
+        CFamilyGroupsClient_NotifyRunningApps_Notification notify;
+        if (notify.ParseFromArray(pBody, cbBody)) {
+            notify.clear_running_apps();
+
+            const auto encSize = notify.ByteSizeLong();
+            if (encSize <= sizeof(g_NewBody) && notify.SerializeToArray(g_NewBody, sizeof(g_NewBody))) {
+                g_cbNewBody = static_cast<uint32>(encSize);
+                g_NeedReplaceBody = true;
+                LOG_NETPACKET_DEBUG("FamilySharing: sanitized NotifyRunningApps (preserved family_groupid {}, cleared running_apps)",
+                                    notify.family_groupid());
+                return;
+            }
+        }
+
+        // Fallback if parsing fails
+        g_cbNewBody = 0;
+        g_NeedReplaceBody = true;
+        LOG_NETPACKET_DEBUG("FamilySharing: cleared NotifyRunningApps body (fallback)");
+    }
+
+    // Clears incoming lock/stop notifications (eMsg 9405 / 9406) to suppress kick timers
     void ClearBody(const uint8*, uint32)
     {
-        LOG_NETPACKET_DEBUG("Clearing family sharing message...");
+        LOG_NETPACKET_DEBUG("FamilySharing: clearing incoming family sharing lock/stop notification");
         g_cbNewBody = 0;
         g_NeedReplaceBody = true;
     }
@@ -1752,6 +1778,15 @@ namespace Hooks_NetPacket_OnlineFix {
                     }
                 }
             }
+
+            // Family sharing concurrency / anti-lock protection:
+            // Mask lender's owner_id to 1 so Steam server does not lock out the lender.
+            if (game->has_owner_id() && game->owner_id() != 0 && game->owner_id() != 1) {
+                LOG_NETPACKET_INFO("FamilySharing: masking owner_id {} -> 1 for game_id {}",
+                                   game->owner_id(), game->game_id());
+                game->set_owner_id(1);
+                patched = true;
+            }
         }
 
         if (!patched) return false;
@@ -2172,11 +2207,14 @@ namespace {
         g_NeedReplaceBody = false;
         g_NeedReplaceHdr  = false;
 
-        switch (Fnv1aHash(targetJobName)) {
-
-        case HASH_JOB_NotifyRunningApps:
-            Hooks_NetPacket_FamilySharing::ClearBody(pBody, cbBody);
+        // Steam sends family notifications as eMsg 146/152 with the job name
+        // suffixed (#1, #2, ...), so match on the method prefix, not a hash.
+        if (std::string_view(targetJobName).find("NotifyRunningApps") != std::string_view::npos) {
+            Hooks_NetPacket_FamilySharing::HandleRecv_NotifyRunningApps(pBody, cbBody);
             return;
+        }
+
+        switch (Fnv1aHash(targetJobName)) {
 
         case HASH_JOB_GetUserStats:
             Hooks_NetPacket_UserStats::HandleRecv_GetUserStatsResponse(pHdr, cbHdr, pBody, cbBody);
@@ -2210,7 +2248,9 @@ namespace {
 
         switch (eMsg) {
 
-        case k_EMsgServiceMethodResponse: {     // 147
+        case k_EMsgServiceMethod:                      // 146
+        case k_EMsgServiceMethodResponse:              // 147
+        case k_EMsgServiceMethodSendToClient: {        // 152
             CMsgProtoBufHeader hdr;
             if (pHdr && cbHdr > 0 && hdr.ParseFromArray(pHdr, static_cast<int>(cbHdr)) && hdr.has_target_job_name())
                 RecvServiceJob(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
