@@ -197,28 +197,52 @@ namespace {
     }
 
     // ── Packet layout ──────────────────────────────────────────
-    inline bool UnpackRaw(const uint8* data, uint32 size,
+    // ctx ("send"/"recv") only feeds the failure log: a frame that fails here
+    // never reaches SendJob/RecvJob, which otherwise looks identical to the
+    // frame never entering the hook at all.
+    inline bool UnpackRaw(const char* ctx, const uint8* data, uint32 size,
                           EMsg& eMsg, const uint8*& pHdr, uint32& cbHdr,
                           const uint8*& pBody, uint32& cbBody)
     {
+        const char* failReason = nullptr;
         if (!data || size < sizeof(MsgHdr)) {
+            failReason = "shorter than MsgHdr";
         fail:
             eMsg = static_cast<EMsg>(0);
             cbHdr = 0;
             pHdr = nullptr;
             pBody = nullptr;
             cbBody = 0;
+            // Bounded so a chatty transport cannot flood the log.
+            {
+                static std::atomic<uint32> s_Fails{0};
+                const uint32 n = s_Fails.fetch_add(1, std::memory_order_relaxed);
+                if (n < 200) {
+                    const uint32 raw = (data && size >= sizeof(uint32))
+                        ? *reinterpret_cast<const uint32*>(data) : 0;
+                    LOG_NETPACKET_DEBUG("UnpackRaw fail[{}]: {} (rawEMsg=0x{:08X}, size={})",
+                                        ctx, failReason ? failReason : "unknown", raw, size);
+                } else if (n == 200) {
+                    LOG_NETPACKET_DEBUG("UnpackRaw fail: log limit reached, suppressing further entries");
+                }
+            }
             return false;
         }
         const MsgHdr* hdr = reinterpret_cast<const MsgHdr*>(data);
-        if (!(hdr->eMsg & kMsgHdrProtoFlag)) goto fail;
+        if (!(hdr->eMsg & kMsgHdrProtoFlag)) {
+            failReason = "no proto flag";
+            goto fail;
+        }
 
         eMsg  = static_cast<EMsg>(hdr->eMsg & ~kMsgHdrProtoFlag);
         cbHdr = hdr->headerLength;
         // Subtract rather than add: `sizeof(MsgHdr) + cbHdr` wraps for cbHdr
         // near UINT32_MAX, which passed the bounds test and put pBody behind
         // data with a ~4 GB cbBody. size >= sizeof(MsgHdr) holds from above.
-        if (cbHdr > size - sizeof(MsgHdr)) goto fail;
+        if (cbHdr > size - sizeof(MsgHdr)) {
+            failReason = "header length overflows frame";
+            goto fail;
+        }
         uint32 off = sizeof(MsgHdr) + cbHdr;
         pHdr   = data + sizeof(MsgHdr);
         pBody  = data + off;
@@ -2229,6 +2253,31 @@ namespace {
               void* pObject, EWebSocketOpCode eWebSocketOpCode,
               uint8* pubData, uint32 cubData)
     {
+        // Diagnostic: a frame dropped below (opcode gate) or rejected by
+        // UnpackRaw is otherwise indistinguishable from a frame that never
+        // entered the hook — which is exactly the ambiguity hiding the
+        // intermittent achievement-sync failure. Binary frames are logged only
+        // for the first few (SendJob covers the rest); non-Binary frames are
+        // always logged because they bypass everything.
+        {
+            const uint32 rawEMsg = (pubData && cubData >= sizeof(uint32))
+                ? *reinterpret_cast<const uint32*>(pubData) : 0;
+            if (eWebSocketOpCode == k_eWebSocketOpCode_Binary) {
+                static std::atomic<uint32> s_Bin{0};
+                if (s_Bin.fetch_add(1, std::memory_order_relaxed) < 50)
+                    LOG_NETPACKET_DEBUG("SendFrame entry: opcode=Binary rawEMsg=0x{:08X} size={}",
+                                        rawEMsg, cubData);
+            } else {
+                static std::atomic<uint32> s_NonBin{0};
+                const uint32 n = s_NonBin.fetch_add(1, std::memory_order_relaxed);
+                if (n < 1000)
+                    LOG_NETPACKET_DEBUG("SendFrame entry: opcode={} (non-Binary) rawEMsg=0x{:08X} size={}",
+                                        static_cast<int32>(eWebSocketOpCode), rawEMsg, cubData);
+                else if (n == 1000)
+                    LOG_NETPACKET_DEBUG("SendFrame entry: non-Binary count hit limit, suppressing further entries");
+            }
+        }
+
         if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
             return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
 
@@ -2259,7 +2308,7 @@ namespace {
         const uint8 *pHdr, *pBody;
         uint32 cbHdr, cbBody;
         bool result;
-        if (UnpackRaw(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
+        if (UnpackRaw("send", pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
             SendJob(eMsg, pBody, cbBody, pHdr, cbHdr);
 
             if (g_SuppressSend) {
@@ -2322,8 +2371,8 @@ namespace {
         EMsg eMsg;
         const uint8 *pBody, *pHdr;
         uint32 cbBody, cbHdr;
-        if (UnpackRaw(NetPkt::Data(pPacket), NetPkt::Size(pPacket),
-                     eMsg, pHdr, cbHdr, pBody, cbBody)) {
+        if (UnpackRaw("recv", NetPkt::Data(pPacket), NetPkt::Size(pPacket),
+                      eMsg, pHdr, cbHdr, pBody, cbBody)) {
             RecvJob(eMsg, pBody, cbBody, pHdr, cbHdr);
 
             if (g_NeedReplaceHdr || g_NeedReplaceBody) {
@@ -2348,6 +2397,11 @@ namespace Hooks_NetPacket {
         INSTALL_HOOK_C(BBuildAndAsyncSendFrame);
         INSTALL_HOOK_C(RecvPkt);
         HOOK_END();
+        // Diagnostic: timestamps when the two hooks go live (the pattern
+        // resolution itself logs to main.log, this marks the detour).
+        LOG_NETPACKET_INFO("Install: BBuildAndAsyncSendFrame {}, RecvPkt {}",
+                           static_cast<const void*>(oBBuildAndAsyncSendFrame) ? "armed" : "MISSING",
+                           static_cast<const void*>(oRecvPkt) ? "armed" : "MISSING");
     }
 
     void Uninstall() {
