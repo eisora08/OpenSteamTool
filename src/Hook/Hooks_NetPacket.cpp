@@ -1,4 +1,5 @@
 #include "Hooks_NetPacket.h"
+#include "Utils/SteamMetadata/AchSchema.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Utils/SteamMetadata/ManifestDonor.h"
 #include "Utils/SteamMetadata/ManifestCache.h"
@@ -16,6 +17,7 @@
 #include "Utils/Support/FnvHash.h"
 #include "Utils/CloudRedirect/CloudRedirectHost.h"
 #include "Steam/NetPacket.h"
+#include "OSTPlatform/include/Hash.h"
 #include "OSTPlatform/include/Memory.h"
 #include "Utils/Config/LuaConfig.h"
 #include <algorithm>
@@ -484,6 +486,8 @@ namespace Hooks_NetPacket_UserStats {
             return;
         }
         LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: original header:\n{}", hdrMsg.DebugString());
+        if (hdrMsg.steamid() != 0)
+            AchSchema::SetLocalAccountId(hdrMsg.steamid());
 
         // Look up pending stats info via jobid_target -> jobid_source match
         PendingStatsJob pending;
@@ -558,6 +562,9 @@ namespace Hooks_NetPacket_UserStats {
             resp.set_crc_stats(crc);
             LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: injected {} CR achievement blocks for app {}", n, appId);
         } else {
+            // An explicit crc marks the record changed even with no unlocks, so the
+            // client persists schema and stats on its next cache flush.
+            resp.set_crc_stats(0);
             LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: cleared stats (no CR achievements for app {})", appId);
         }
 
@@ -566,6 +573,35 @@ namespace Hooks_NetPacket_UserStats {
         if (hdrMsg.has_error_message()) {
             hdrMsg.clear_error_message();
         }
+
+        // First fetch (client sent no sha): donor was denied, so serve a synthesized
+        // schema so the client can persist UserGameStatsSchema and list achievements.
+        // When the client already sent a sha it has a schema of its own — never
+        // replace that with a synthesized one (the sha restore above covers it).
+        // When the schema already sits in appcache\stats, stand down: an empty
+        // response makes the client use its own disk-load fallback, which is the
+        // path the Steam client and tools like SLSah rely on.
+        if (resp.schema().empty() && pending.shaSchema.empty()) {
+            if (AchSchema::SteamStatsFileExists(appId)) {
+                LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: schema on disk for app {}, deferring to client disk load", appId);
+            } else {
+                std::string synth = AchSchema::GetCached(appId);
+                if (synth.empty()) {
+                    AchSchema::RequestSynth(appId);
+                    synth = AchSchema::GetCachedAwait(appId, std::chrono::milliseconds(6000));
+                }
+                if (synth.empty()) {
+                    LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: no schema for app {}, synthesis requested", appId);
+                } else {
+                    resp.set_schema(synth);
+                    resp.set_sha_schema(OSTPlatform::Hash::Sha1RawOfBuffer(synth.data(), synth.size()));
+                    AchSchema::EnsureSteamStatsFiles(appId, synth);
+                    LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: injected synthetic schema ({} bytes) for app {}",
+                                          synth.size(), appId);
+                }
+            }
+        }
+
         uint32 cbHdrNew = static_cast<uint32>(hdrMsg.ByteSizeLong());
         if (cbHdrNew > kMaxHdrSize || !hdrMsg.SerializeToArray(g_NewHdr, kMaxHdrSize))
             return;
