@@ -27,6 +27,8 @@ namespace {
     void HandlerPost_IClientUser_GetSteamID(CPipeClient* pipe,CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
         AppId_t appId = Hooks_Misc::ResolveAppId();
+        // Owned/shared apps keep the real SteamID — no pool-account spoof.
+        if (LuaConfig::IsOwned(appId)) return;
         GetSteamIDResp resp{pWrite};
         if (!resp.ok()) return;
 
@@ -151,6 +153,8 @@ namespace {
     void HandlerPost_IClientUser_GetEncryptedAppTicket(CPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
         AppId_t appId = Hooks_Misc::ResolveAppId();
+        // Owned/shared apps are served their genuine ticket untouched.
+        if (LuaConfig::IsOwned(appId)) return;
 
         // Prefer a fresh nonce-bound ticket minted in RequestEncryptedAppTicket;
         // fall back to the static credential-store ticket (titles that don't

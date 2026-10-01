@@ -28,7 +28,7 @@ endif()
 # Source files and comments carry non-ASCII literals; without this MSVC picks
 # the system codepage and misreads them (and C4819 warnings follow).
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /EHsc)
 endif()
 
 # Keep the Windows min/max macros from clobbering std::min/std::max.

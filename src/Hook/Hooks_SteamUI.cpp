@@ -55,21 +55,18 @@ namespace
                     g_parentApp[pApp->nAppID] = pApp->ParentAppID;
             }
 
+            // Shared licenses are normalized as owned in CheckAppOwnership, so
+            // a lock left on the overview would still grey out Play for them.
+            if (pApp->OwnershipFlags & k_EAppOwnershipFlags_LicenseLocked)
+            {
+                pApp->OwnershipFlags = static_cast<EAppOwnershipFlags>(
+                    pApp->OwnershipFlags & ~k_EAppOwnershipFlags_LicenseLocked);
+                LOG_STEAMUI_TRACE("FillInAppOverview: cleared LicenseLocked for appId={}",
+                                  pApp->nAppID);
+            }
+
             if (LuaConfig::HasDepot(pApp->nAppID, false))
             {
-                // We forge ownership for configured apps, so a license that
-                // Steam reports as locked by another local user must not keep
-                // the Play button disabled. Scoped to configured apps only:
-                // stripping it globally would enable Play on shared games we
-                // do not inject for, which Steam then rejects at launch.
-                if (pApp->OwnershipFlags & k_EAppOwnershipFlags_LicenseLocked)
-                {
-                    pApp->OwnershipFlags = static_cast<EAppOwnershipFlags>(
-                        pApp->OwnershipFlags & ~k_EAppOwnershipFlags_LicenseLocked);
-                    LOG_STEAMUI_TRACE("FillInAppOverview: cleared LicenseLocked for appId={}",
-                                      pApp->nAppID);
-                }
-
                 uint32_t t = LuaConfig::GetPurchaseTime(pApp->nAppID);
                 if (t)
                 {

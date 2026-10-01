@@ -208,12 +208,42 @@ namespace {
             LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", g_pCUser.load());
         }
 
-        bool result = oCheckAppOwnership(pObj, appId, pOwn);
+        AppOwnership localOwn{};
+        AppOwnership* pEffectiveOwn = pOwn ? pOwn : &localOwn;
+
+        bool result = oCheckAppOwnership(pObj, appId, pEffectiveOwn);
         TryInitFakeLicenseOnce();
         // Drain any license refresh requested while the fake package was being
         // built; CheckAppOwnership is the Steam thread that owns these calls.
         TryProcessPendingLicenseRefresh();
         Hooks_Package::TryDumpOwnedDepots();
+
+        // A real (non-injected, unexpired) shared license counts as owned so
+        // family-shared games stay playable without the lock flags.
+        const bool isSharedLicense = (pEffectiveOwn->bFamilyShared || pEffectiveOwn->bBorrowed) &&
+                                     (pEffectiveOwn->PackageId != 0) &&
+                                     (pEffectiveOwn->PackageId != kInjectedPackageId) &&
+                                     (pEffectiveOwn->ExistInPackageNums >= 1) &&
+                                     !pEffectiveOwn->bLicenseExpired;
+        if (isSharedLicense) {
+            if (pEffectiveOwn->bLicenseLocked) {
+                LOG_PACKAGE_DEBUG("CheckAppOwnership: clearing bLicenseLocked for shared AppId={}", appId);
+                pEffectiveOwn->bLicenseLocked = false;
+            }
+            pEffectiveOwn->bBorrowed = false;
+            pEffectiveOwn->bOwnsLicense = true;
+            result = true;
+        }
+
+        const bool isTrulyOwned = result &&
+                                  (pEffectiveOwn->PackageId != kInjectedPackageId) &&
+                                  (pEffectiveOwn->PackageId != 0) &&
+                                  (pEffectiveOwn->ExistInPackageNums >= 1) &&
+                                  pEffectiveOwn->bOwnsLicense &&
+                                  !pEffectiveOwn->bLicenseExpired;
+        if (isTrulyOwned) {
+            LuaConfig::MarkOwned(appId);
+        }
 
         if (LuaConfig::HasDepot(appId,false)) {
             if (pOwn) {
@@ -227,6 +257,10 @@ namespace {
                     pOwn->bOwnsLicense = true; //This forces DLCs on steam family shared games that u dont own when adding their appid via .lua
                     // Setting this free flag to false will hide it from the library UI.
                     pOwn->bFreeLicense = false;
+                    pOwn->bFamilyShared = false;
+                    pOwn->bBorrowed     = false;
+                    pOwn->bLicenseLocked = false;
+                    pOwn->SteamId32     = 0;
                     return true;
                 }
             } else {
