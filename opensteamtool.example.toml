@@ -91,7 +91,7 @@ enable_api = true
 enabled = false
 
 # Additional Lua config directories (optional).
-# Files are loaded after the default <Steam>/config/stplug-in folder.
+# Files are loaded after the default <Steam>/config/lua folder.
 # The default folder is always loaded last so user files take priority.
 # Example — load a custom directory on another drive:
 #   [lua]
