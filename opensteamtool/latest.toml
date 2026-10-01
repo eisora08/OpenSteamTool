@@ -1,3 +1,3 @@
-version = "v1.4.8.2"
-path    = "opensteamtool/v1.4.8.2/OpenSteamTool.dll"
-sha256  = "94eb072f9de81ab041c7a85c723fe65f1a7c6aff8a1c5e9546b9a7ea912e1898"
+version = "v1.4.8.3"
+path    = "opensteamtool/v1.4.8.3/OpenSteamTool.dll"
+sha256  = "91078272eda893245aeb46500174f9b0a7eddba62f5be3c55072c34fde910f2c"
