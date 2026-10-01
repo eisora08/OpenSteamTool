@@ -501,10 +501,19 @@ namespace Hooks_NetPacket_UserStats {
             }
         }
 
-        // Owned games and unmanaged games (e.g. family sharing without Lua) must pass untouched
+        // Owned games and unmanaged games (e.g. family sharing without Lua) keep their body
         if (!hasPending || LuaConfig::IsOwned(pending.appId) ||
             (!LuaConfig::HasDepot(pending.appId) && !CloudRedirectHost::IsApp(pending.appId))) {
-            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: unmanaged appid {} (or no match), skip", pending.appId);
+            hdrMsg.set_eresult(static_cast<int32_t>(k_EResultOK));
+            if (hdrMsg.has_error_message()) {
+                hdrMsg.clear_error_message();
+            }
+            uint32 cbHdrNew = static_cast<uint32>(hdrMsg.ByteSizeLong());
+            if (cbHdrNew > kMaxHdrSize || !hdrMsg.SerializeToArray(g_NewHdr, kMaxHdrSize))
+                return;
+            g_cbNewHdr = cbHdrNew;
+            g_NeedReplaceHdr = true;
+            LOG_ACHIEVEMENT_DEBUG("Player::GetUserStats response: unmanaged appid {} (or no match), header forced OK, body untouched", pending.appId);
             return;
         }
 
