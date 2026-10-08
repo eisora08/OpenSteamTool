@@ -1,4 +1,5 @@
 #include "Hooks_NetPacket.h"
+#include "Hook/Hooks_Decryption.h"
 #include "Utils/SteamMetadata/AchSchema.h"
 #include "Utils/SteamMetadata/ManifestClient.h"
 #include "Utils/SteamMetadata/ManifestDonor.h"
@@ -30,6 +31,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "steam_messages.pb.h"
@@ -874,7 +876,18 @@ namespace Hooks_NetPacket_OwnershipTicket {
         }
 
         // Steam already returned a valid ticket (account owns it) — leave it.
-        if (resp.eresult() == k_EResultOK) return;
+        if (resp.eresult() == k_EResultOK) {
+            // Harvest for the in-memory forge-template cache: on a fresh PC
+            // localconfig has no apptickets\7, so this 858 reply (either
+            // Steam's own refresh or our originated 857) is the only source.
+            if (resp.has_ticket()) {
+                Hooks_Decryption::CacheAppOwnershipTicket(
+                    resp.app_id(),
+                    reinterpret_cast<const uint8*>(resp.ticket().data()),
+                    resp.ticket().size());
+            }
+            return;
+        }
         if (!LuaConfig::HasDepot(resp.app_id())) return;
 
         const int32 origEresult = resp.eresult();
@@ -1237,6 +1250,98 @@ namespace Hooks_NetPacket_ManifestProbe {
     }
 
 } // namespace Hooks_NetPacket_ManifestProbe
+
+
+// ════════════════════════════════════════════════════════════════
+//  Hooks_NetPacket_TicketFetch
+//  Originates eMsg 857 GetAppOwnershipTicket (error-54 fallback, Fase 2):
+//  a PC whose localconfig has no apptickets\7 has nothing to template the
+//  ownership-ticket forge from, so ask Steam directly. The 858 reply is
+//  harvested into the in-memory cache by the OwnershipTicket recv handler;
+//  callers wait on that cache rather than on a jobid.
+// ════════════════════════════════════════════════════════════════
+namespace Hooks_NetPacket_TicketFetch {
+
+    namespace Probe = Hooks_NetPacket_ManifestProbe;
+
+    std::mutex g_Mutex;
+    // One-shot per appId: a request that timed out is not retried this
+    // session, so repeated IPC callers cannot stack wait stalls.
+    std::unordered_set<AppId_t> g_Failed;
+    // Distinct range from ManifestProbe (0x7E51...) so the two never share
+    // a jobid namespace.
+    uint64 g_NextJobId = 0x7E52'0000'0000'0000ull;
+
+    // Builds and sends "08 <varint appId>" — CMsgClientGetAppOwnershipTicket
+    // { app_id = 1 }, serialised by hand: steam_messages.proto only carries
+    // the 858 response, there is no request schema in-tree.
+    bool Send(AppId_t appId)
+    {
+        std::vector<uint8> hdrTemplate;
+        void*           ws   = nullptr;
+        Probe::SendFrameFn send = nullptr;
+        uint64          jobId = 0;
+        {
+            // Send context is captured by the send hook on outbound frames;
+            // reuse ManifestProbe's (same file, captured at login).
+            std::lock_guard<std::mutex> lock(Probe::g_Mutex);
+            if (!Probe::g_pWebSocket || !Probe::g_sendFrame || Probe::g_HdrTemplate.empty()) {
+                LOG_NETPACKET_WARN("OwnershipTicketFetch: no send context captured yet "
+                                   "(websocket={}, sendFn={}, header={} bytes) - is Steam logged in?",
+                                   Probe::g_pWebSocket != nullptr, Probe::g_sendFrame != nullptr,
+                                   Probe::g_HdrTemplate.size());
+                return false;
+            }
+            hdrTemplate = Probe::g_HdrTemplate;
+            ws          = Probe::g_pWebSocket;
+            send        = Probe::g_sendFrame;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_Mutex);
+            jobId = ++g_NextJobId;
+        }
+
+        CMsgProtoBufHeader hdr;
+        if (!hdr.ParseFromArray(hdrTemplate.data(), static_cast<int>(hdrTemplate.size()))) {
+            LOG_NETPACKET_WARN("OwnershipTicketFetch: header template failed to parse");
+            return false;
+        }
+        hdr.clear_target_job_name();   // plain eMsg, not a service method
+        hdr.set_jobid_source(jobId);
+        hdr.clear_jobid_target();
+
+        std::vector<uint8> body;       // field 1 (app_id), wire type 0 (varint)
+        {
+            uint32 v = appId;
+            body.push_back(0x08);
+            while (v >= 0x80) {
+                body.push_back(static_cast<uint8>(v) | 0x80);
+                v >>= 7;
+            }
+            body.push_back(static_cast<uint8>(v));
+        }
+
+        const uint32 cbHdr = static_cast<uint32>(hdr.ByteSizeLong());
+        std::vector<uint8> frame(sizeof(MsgHdr) + cbHdr + body.size());
+
+        auto* mhdr = reinterpret_cast<MsgHdr*>(frame.data());
+        mhdr->eMsg = static_cast<EMsg>(
+            static_cast<uint32>(k_EMsgClientGetAppOwnershipTicket) | kMsgHdrProtoFlag);
+        mhdr->headerLength = cbHdr;
+
+        if (!hdr.SerializeToArray(frame.data() + sizeof(MsgHdr), cbHdr)) {
+            LOG_NETPACKET_WARN("OwnershipTicketFetch: failed to serialise header");
+            return false;
+        }
+        std::memcpy(frame.data() + sizeof(MsgHdr) + cbHdr, body.data(), body.size());
+
+        LOG_NETPACKET_INFO("OwnershipTicketFetch send: app={} jobid={} ({} bytes)",
+                           appId, jobId, frame.size());
+        return send(ws, k_eWebSocketOpCode_Binary,
+                    frame.data(), static_cast<uint32>(frame.size()));
+    }
+
+} // namespace Hooks_NetPacket_TicketFetch
 
 
 // ════════════════════════════════════════════════════════════════
@@ -2171,6 +2276,22 @@ namespace {
                     Hooks_NetPacket_RichPresence::g_LocalSteamId.store(hdr.steamid(), std::memory_order_relaxed);
                     CloudRedirectHost::SetAccountId(static_cast<uint32_t>(hdr.steamid() & 0xFFFFFFFF));
                     LOG_ACHIEVEMENT_DEBUG("Captured local SteamID 0x{:X} from outbound packet", hdr.steamid());
+                    // Error-54 warm-up: fetch the Steam-Client (7) ownership
+                    // ticket the forge templates from, so game launch does not
+                    // have to block on the round-trip. One-shot; no-op when
+                    // localconfig already has an apptickets\7 entry.
+                    static std::once_flag g_TicketWarmOnce;
+                    std::call_once(g_TicketWarmOnce, [] {
+                        std::thread([] {
+                            std::this_thread::sleep_for(std::chrono::seconds(2));
+                            constexpr AppId_t kSteamClientAppId = 7;
+                            if (!Hooks_Decryption::GetCacheAppOwnershipTicket(kSteamClientAppId).empty())
+                                return;
+                            if (!Hooks_Decryption::GetMemCachedAppOwnershipTicket(kSteamClientAppId).empty())
+                                return;
+                            Hooks_NetPacket::RequestOwnershipTicket(kSteamClientAppId, 4000);
+                        }).detach();
+                    });
                 }
             }
         }
@@ -2498,6 +2619,28 @@ namespace Hooks_NetPacket {
 
     std::future<uint64_t> RequestManifestCode(AppId_t appId, uint32_t depotId, uint64_t gid) {
         return Hooks_NetPacket_ManifestProbe::Request(appId, depotId, gid);
+    }
+
+    bool RequestOwnershipTicket(AppId_t appId, uint32_t timeoutMs) {
+        if (appId == 0) return false;
+        if (!Hooks_Decryption::GetMemCachedAppOwnershipTicket(appId).empty()) return true;
+        {
+            std::lock_guard<std::mutex> lock(Hooks_NetPacket_TicketFetch::g_Mutex);
+            if (Hooks_NetPacket_TicketFetch::g_Failed.contains(appId)) return false;
+        }
+        if (!Hooks_NetPacket_TicketFetch::Send(appId)) return false;
+
+        const auto ticket = Hooks_Decryption::WaitForCachedTicket(appId, timeoutMs);
+        if (ticket.empty()) {
+            std::lock_guard<std::mutex> lock(Hooks_NetPacket_TicketFetch::g_Mutex);
+            Hooks_NetPacket_TicketFetch::g_Failed.insert(appId);
+            LOG_NETPACKET_WARN("OwnershipTicketFetch: no ticket for app {} within {} ms",
+                               appId, timeoutMs);
+            return false;
+        }
+        LOG_NETPACKET_INFO("OwnershipTicketFetch: got ticket for app {} ({} bytes)",
+                           appId, ticket.size());
+        return true;
     }
 
     bool ProbeManifest(uint32_t depotId) {

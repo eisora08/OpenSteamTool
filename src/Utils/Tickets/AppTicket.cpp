@@ -1,5 +1,6 @@
 #include "AppTicket.h"
 #include "Hook/Hooks_Decryption.h"
+#include "Hook/Hooks_NetPacket.h"
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "Utils/Config/LuaConfig.h"
 #include "Utils/Logging/Log.h"
@@ -39,11 +40,44 @@ namespace AppTicket {
         return ticket;
     }
 
+    // The forge only needs SOME signed ownership ticket of this account — the
+    // template's appid is overwritten. Tried in order:
+    //   1. localconfig apptickets\7 (Steam's own cache; a fresh PC has none)
+    //   2. in-memory ticket harvested from Steam's apptickets reads / 858 replies
+    //   3. any other in-memory ticket (same account, any app)
+    //   4. originate eMsg 857 for app 7 and wait for the 858 reply (brief stall)
+    static std::vector<uint8_t> ResolveForgeSource() {
+        const auto usable = [](const std::vector<uint8_t>& t) {
+            return t.size() > kAppTicketSignatureSize;
+        };
+
+        std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(kLocalAppTicketSourceAppId);
+        if (usable(source)) return source;
+
+        source = Hooks_Decryption::GetMemCachedAppOwnershipTicket(kLocalAppTicketSourceAppId);
+        if (usable(source)) return source;
+
+        source = Hooks_Decryption::GetAnyMemCachedAppOwnershipTicket();
+        if (usable(source)) return source;
+
+        LOG_INFO("ForgeLocalAppOwnershipTicket: no cached template, requesting ownership ticket {} from Steam",
+                 kLocalAppTicketSourceAppId);
+        Hooks_NetPacket::RequestOwnershipTicket(kLocalAppTicketSourceAppId, 1500);
+
+        source = Hooks_Decryption::GetMemCachedAppOwnershipTicket(kLocalAppTicketSourceAppId);
+        if (usable(source)) return source;
+
+        return Hooks_Decryption::GetAnyMemCachedAppOwnershipTicket();
+    }
+
     // Exploit steamdrmp's off-by-four ticket parsing vulnerability:
     static std::vector<uint8_t> ForgeLocalAppOwnershipTicket(AppId_t appId) {
-        std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(kLocalAppTicketSourceAppId);
+        std::vector<uint8_t> source = ResolveForgeSource();
         if (source.size() <= kAppTicketSignatureSize) {
-            LOG_DEBUG("ForgeLocalAppOwnershipTicket for AppId {}: no source appticket", appId);
+            LOG_ERROR("ForgeLocalAppOwnershipTicket for AppId {}: no source appticket — localconfig "
+                      "apptickets\\{} is empty, nothing harvested this session, and the eMsg 857 "
+                      "request did not produce one (Steam not logged in, timed out, or refused)",
+                      appId, kLocalAppTicketSourceAppId);
             return {};
         }
 

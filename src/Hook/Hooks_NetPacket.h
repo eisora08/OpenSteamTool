@@ -26,4 +26,15 @@ namespace Hooks_NetPacket {
     // Hooks_Manifest::LookupDepot, so the depot must have been seen during an
     // install or update this session. Logs the outcome and discards the code.
     bool ProbeManifest(uint32_t depotId);
+
+    // Originate eMsg 857 GetAppOwnershipTicket for `appId` and wait up to
+    // `timeoutMs` for the 858 reply to land in the in-memory ticket cache
+    // (error-54 fallback, Fase 2: a PC with no localconfig apptickets\7 has
+    // no template for the ownership-ticket forge).
+    //
+    // Returns true when a ticket is cached on return (already cached counts).
+    // One-shot per appId per session: a request that timed out is not
+    // retried, so repeated callers cannot stack stalls. Returns false when
+    // Steam is not logged in (no send context) — transient, not marked.
+    bool RequestOwnershipTicket(AppId_t appId, uint32_t timeoutMs);
 }
