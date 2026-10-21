@@ -72,7 +72,17 @@ namespace {
             LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} not in authorization window, credential store preferred", appId);
             ticketSource = AppTicket::AppTicketSource::CredentialStoreThenForge;
         }        
-        if (!AppTicket::GetAppOwnershipTicket(appId, ticket, ticketSource)) return;
+        if (!AppTicket::GetAppOwnershipTicket(appId, ticket, ticketSource)) {
+            if (ticketSource != AppTicket::AppTicketSource::CredentialStoreOnly) return;
+
+            // No pool-account ticket in the credential store (unactivated app, or a
+            // false-positive protector such as Enigma that opened the Denuvo window).
+            // Serve the forged ticket instead of an empty response, which the game
+            // reports as error 54.
+            LOG_IPC_WARN("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} no credential-store ticket in auth window, serving forged ticket",
+                         appId);
+            if (!AppTicket::GetAppOwnershipTicket(appId, ticket, AppTicket::AppTicketSource::ForgeOnly)) return;
+        }
 
         if (ticket.data.size() > static_cast<size_t>(req.cbMaxTicket())) {
             LOG_IPC_WARN("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} ticket too large ({} bytes) for buffer ({} bytes)",

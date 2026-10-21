@@ -177,6 +177,9 @@ namespace {
         if (LuaConfig::IsForcedDenuvo(appId)) {
             auth.denuvo = true;
             LOG_PIPE_INFO("DenuvoAuth: forcedenuvo appid={} — skipping ProtectionScan", appId);
+        } else if (LuaConfig::IsForcedNonDenuvo(appId)) {
+            auth.denuvo = false;
+            LOG_PIPE_INFO("DenuvoAuth: forcedenuvo(false) appid={} - skipping ProtectionScan", appId);
         } else {
             auth.denuvo = ScanProtection(process.pid).denuvoDetected;
         }

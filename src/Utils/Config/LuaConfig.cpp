@@ -38,6 +38,8 @@ namespace LuaConfig{
     static std::unordered_map<std::string, AppId_t> ProcessNameAppIdMap{};
     // App IDs that should bypass ProtectionScan and be treated as Denuvo games.
     static std::unordered_set<AppId_t> ForcedDenuvoSet{};
+    // App IDs explicitly marked as not-Denuvo via forcedenuvo(appid, false).
+    static std::unordered_set<AppId_t> ForcedNonDenuvoSet{};
     // On-demand eticket mint endpoint, set via seteticketurl() in Lua config.
     // Empty = disabled (EticketClient falls back to credential-store ticket).
     static std::string EticketUrl{};
@@ -324,13 +326,25 @@ namespace LuaConfig{
     }
 
     static int lua_forcedenuvo(lua_State* L) {
-        // forcedenuvo(appid) — bypass ProtectionScan for games where the heuristic fails.
+        // forcedenuvo(appid[, force]) — override ProtectionScan for games where
+        // the heuristic fails. force defaults to true; false marks the app as
+        // not-Denuvo so the auth window is never opened.
         if (lua_gettop(L) < 1 || !lua_isinteger(L, 1))
-            return luaL_error(L, "forcedenuvo requires (appid: integer)");
+            return luaL_error(L, "forcedenuvo requires (appid: integer[, force: boolean])");
         lua_Integer value = lua_tointeger(L, 1);
         if (value <= 0 || value > static_cast<lua_Integer>(UINT32_MAX))
             return luaL_error(L, "forcedenuvo: appid out of range");
-        ForcedDenuvoSet.insert(static_cast<AppId_t>(value));
+        if (lua_gettop(L) >= 2 && !lua_isboolean(L, 2))
+            return luaL_error(L, "forcedenuvo: force must be a boolean");
+        const bool force = lua_gettop(L) < 2 || lua_toboolean(L, 2) != 0;
+        const AppId_t appId = static_cast<AppId_t>(value);
+        if (force) {
+            ForcedNonDenuvoSet.erase(appId);
+            ForcedDenuvoSet.insert(appId);
+        } else {
+            ForcedDenuvoSet.erase(appId);
+            ForcedNonDenuvoSet.insert(appId);
+        }
         return 0;
     }
 
@@ -557,6 +571,10 @@ namespace LuaConfig{
 
     bool IsForcedDenuvo(AppId_t appId) {
         return ForcedDenuvoSet.count(appId) > 0;
+    }
+
+    bool IsForcedNonDenuvo(AppId_t appId) {
+        return ForcedNonDenuvoSet.count(appId) > 0;
     }
 
     const std::string& GetEticketUrl() {

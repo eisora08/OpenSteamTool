@@ -91,6 +91,15 @@ namespace {
     constexpr double kProtectorBlobHighConfidenceEntropy = 7.0;         // looks encrypted/packed at rest
     constexpr size_t kProtectorBlobEntropySampleBytes = 8ull * 1024ull * 1024ull;  // cap per-section read
 
+    // Enigma Protector is a non-Denuvo wrapper that also ships a large RWX,
+    // high-entropy code section, so the structural fallback below would flag it
+    // as Denuvo. Enigma embeds its own PKCS#7 signature (subject "Enigma
+    // Protector") inside a data section, which lets us skip only that heuristic
+    // (OEP / legacy markers still win).
+    constexpr std::array<uint8_t, 16> kEnigmaSignatureMarker = {
+        'E', 'n', 'i', 'g', 'm', 'a', ' ', 'P', 'r', 'o', 't', 'e', 'c', 't', 'o', 'r',
+    };
+
     double SectionEntropy(std::span<const uint8_t> bytes) {
         if (bytes.empty()) return 0.0;
         std::array<uint64, 256> counts{};
@@ -267,6 +276,22 @@ namespace {
         return match;
     }
 
+    // Enigma's embedded signature lives in one of its own sections, not in the
+    // Authenticode table (the game keeps the publisher's signature there). Only
+    // reached after the OEP and legacy Denuvo checks came up empty, so the cost
+    // of this full-file pass is paid on the false-positive path alone.
+    bool IsEnigmaProtected(const ModuleCandidate& module) {
+        const auto matchRaw = OSTPlatform::ByteSearch::FindInFile(
+            module.nativePath,
+            kEnigmaSignatureMarker,
+            kLegacyScanChunkBytes);
+        if (matchRaw) {
+            LOG_PIPE_DEBUG("DenuvoAuth: Enigma signature found path={} raw_offset=0x{:X}",
+                           module.path, *matchRaw);
+        }
+        return matchRaw.has_value();
+    }
+
     std::optional<DetectionMatch> TryProtectedBlobSection(
         const ModuleCandidate& module,
         const OSTPlatform::PE::Image& image) {
@@ -318,6 +343,14 @@ namespace {
             if (auto match = TryLegacySectionString(module, image, *legacySection)) {
                 return match;
             }
+        }
+
+        // Enigma reuses the RWX + high-entropy shape the generic blob heuristic
+        // keys on. Skip only that heuristic so the wrapper is not reported as
+        // Denuvo; the two checks above already covered real Denuvo markers.
+        if (IsEnigmaProtected(module)) {
+            LOG_PIPE_DEBUG("DenuvoAuth: Enigma-signed module, skipping protected-blob heuristic path={}", module.path);
+            return std::nullopt;
         }
 
         // Structural fallback: catches Denuvo builds that carry the legacy
