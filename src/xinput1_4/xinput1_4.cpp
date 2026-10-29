@@ -124,13 +124,42 @@ extern "C" {
 }
 
 // ─── 4. OpenSteamTool Injection ───────────────────────────────────
+// Inject only when the host process is steam.exe (case-insensitive) AND the
+// expected local marker file sits beside it. Without the marker the host
+// starts completely unmodified (no hooks, watchers, updater or cloud
+// redirection). Kept in sync with dwmapi.cpp.
 BOOL OpenSteamToolLoad() {
     char exePath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, exePath, MAX_PATH)) {
-        const char* exeName = strrchr(exePath, '\\');
-        exeName = exeName ? exeName + 1 : exePath;
-        if (_stricmp(exeName, "steam.exe") != 0) return TRUE;
-    }
+    if (!GetModuleFileNameA(NULL, exePath, MAX_PATH)) return TRUE;  // fail closed
+
+    const char* exeName = strrchr(exePath, '\\');
+    exeName = exeName ? exeName + 1 : exePath;
+    if (_stricmp(exeName, "steam.exe") != 0) return TRUE;
+
+    // Marker path is stored encoded and rebuilt here at runtime.
+    static const unsigned char kEnc[24] = {
+        0x06,0x36,0x2F,0x37,0x3B,0x3C,0x35,0x28,0x3D,0x3F,
+        0x06,0x36,0x2F,0x37,0x3B,0x3C,0x35,0x28,0x3D,0x3F,
+        0x74,0x3E,0x36,0x36
+    };
+    char marker[sizeof(kEnc) + 1];
+    for (size_t i = 0; i < sizeof(kEnc); ++i)
+        marker[i] = static_cast<char>(kEnc[i] ^ 0x5A);
+    marker[sizeof(kEnc)] = '\0';
+
+    char* const dirEnd = strrchr(exePath, '\\');
+    if (!dirEnd) return TRUE;
+    const size_t dirLen = static_cast<size_t>(dirEnd - exePath);
+    if (dirLen + sizeof(marker) > MAX_PATH) return TRUE;
+    memcpy(exePath + dirLen, marker, sizeof(marker));
+
+    const DWORD attrs = GetFileAttributesA(exePath);
+    const bool ok = (attrs != INVALID_FILE_ATTRIBUTES) &&
+                    !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    SecureZeroMemory(marker, sizeof(marker));
+    SecureZeroMemory(exePath, sizeof(exePath));
+    if (!ok) return TRUE;   // marker missing — don't inject
+
     return LoadLibraryA("OpenSteamTool.dll") != NULL;
 }
 

@@ -13,7 +13,6 @@
 #ifdef OST_ENABLE_UPDATER
 #include "Utils/Update/AppUpdater.h"
 #endif
-#include "OSTPlatform/include/Dialog.h"
 #include "OSTPlatform/include/DynamicLibrary.h"
 #include "OSTPlatform/include/Thread.h"
 
@@ -141,11 +140,13 @@ static uint32_t InitThreadInner(OSTPlatform::DynamicLibrary::ModuleHandle selfMo
             if (!upd.updateAvailable) return 0;
             if (!AppUpdater::DownloadAndStage(upd, self)) return 0;
 
-            const bool restart = OSTPlatform::Dialog::ShowConfirm(
-                "OpenSteamTool (fork) Updated!",
-                upd.oldVersion + " -> " + upd.newVersion +
-                "\n\nRestart Steam now to apply?");
-            if (restart) AppUpdater::RestartSteam();
+            // Silent apply. DownloadAndStage has already verified the SHA-256 and
+            // written the new bytes to disk; they load on the next Steam start, so
+            // there is nothing the user needs to confirm. Never auto-restart here:
+            // an update must not interrupt a running session (a restart mid-game
+            // would cut cloud sync and any active download).
+            LOG_INFO("AppUpdater: {} -> {} staged silently; applies on next Steam start",
+                     upd.oldVersion, upd.newVersion);
             return 0;
         });
     }

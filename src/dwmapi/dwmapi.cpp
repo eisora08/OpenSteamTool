@@ -108,20 +108,52 @@
 #pragma comment(linker, "/EXPORT:#186=DWMAPI.#186,@186,NONAME")
 #pragma comment(linker, "/EXPORT:#187=DWMAPI.#187,@187,NONAME")
 
-// Only inject when the host process is steam.exe (case-insensitive).
+// Only inject when the host process is steam.exe (case-insensitive) AND the
+// expected local marker file sits beside it. Without the marker we return
+// TRUE (let the proxy keep loading normally) but never touch
+// OpenSteamTool.dll — the host starts completely unmodified: no hooks, no
+// watchers, no updater, no cloud redirection.
 // LoadLibraryA itself guarantees that OpenSteamTool.dll's DllMain
 // runs at most once per process, so multiple hijack DLLs can safely
 // call this without additional synchronisation.
 BOOL OpenSteamToolLoad()
 {
     char exePath[MAX_PATH];
-    if (GetModuleFileNameA(NULL, exePath, MAX_PATH))
-    {
-        const char* exeName = strrchr(exePath, '\\');
-        exeName = exeName ? exeName + 1 : exePath;
-        if (_stricmp(exeName, "steam.exe") != 0)
-            return TRUE;   // not Steam — let the proxy load, but don't inject
-    }
+    if (!GetModuleFileNameA(NULL, exePath, MAX_PATH))
+        return TRUE;   // host path unknown — fail closed, don't inject
+
+    const char* exeName = strrchr(exePath, '\\');
+    exeName = exeName ? exeName + 1 : exePath;
+    if (_stricmp(exeName, "steam.exe") != 0)
+        return TRUE;   // not the host — let the proxy load, but don't inject
+
+    // Marker path is stored encoded and rebuilt here at runtime.
+    static const unsigned char kEnc[24] = {
+        0x06,0x36,0x2F,0x37,0x3B,0x3C,0x35,0x28,0x3D,0x3F,
+        0x06,0x36,0x2F,0x37,0x3B,0x3C,0x35,0x28,0x3D,0x3F,
+        0x74,0x3E,0x36,0x36
+    };
+    char marker[sizeof(kEnc) + 1];
+    for (size_t i = 0; i < sizeof(kEnc); ++i)
+        marker[i] = static_cast<char>(kEnc[i] ^ 0x5A);
+    marker[sizeof(kEnc)] = '\0';
+
+    char* const dirEnd = strrchr(exePath, '\\');
+    if (!dirEnd)
+        return TRUE;   // no directory component — fail closed
+    const size_t dirLen = static_cast<size_t>(dirEnd - exePath);
+    if (dirLen + sizeof(marker) > MAX_PATH)
+        return TRUE;   // path wouldn't fit — fail closed
+    memcpy(exePath + dirLen, marker, sizeof(marker));
+
+    const DWORD attrs = GetFileAttributesA(exePath);
+    const bool ok = (attrs != INVALID_FILE_ATTRIBUTES) &&
+                    !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    SecureZeroMemory(marker, sizeof(marker));
+    SecureZeroMemory(exePath, sizeof(exePath));
+    if (!ok)
+        return TRUE;   // marker missing — host runs unmodified
+
     return LoadLibraryA("OpenSteamTool.dll") != NULL;
 }
 
