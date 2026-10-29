@@ -124,7 +124,9 @@ static uint32_t InitThreadInner(OSTPlatform::DynamicLibrary::ModuleHandle selfMo
     TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
 
     // Optional self-update check. Runs on its own detached thread so the network
-    // round-trip never delays hook installation; a staged DLL applies next launch.
+    // round-trip never delays hook installation; staged files apply next launch.
+    // DownloadAndStage() also carries the loader proxies when the pointer names
+    // their digests, so the whole set stays in sync with the published version.
     //
     // Compiled out entirely by -DOST_ENABLE_UPDATER=OFF. That is deliberately a
     // build-time cut rather than a runtime one: a pinned or private build should

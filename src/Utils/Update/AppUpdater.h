@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace AppUpdater {
 
@@ -9,7 +10,16 @@ namespace AppUpdater {
         std::string oldVersion;   // version baked into the running DLL
         std::string newVersion;   // version named by latest.toml
         std::string dllRelPath;   // branch-relative path to the new DLL
-        std::string sha256;       // expected SHA-256 of the new DLL
+        std::string sha256;       // expected SHA-256 of the main DLL
+
+        // Companion DLLs published beside the main one (the loader proxies).
+        // Each carries its own path + digest; a pointer that omits them (the
+        // older feed format) simply yields an empty list.
+        struct Companion {
+            std::string relPath;   // branch-relative path to the file
+            std::string sha256;    // expected SHA-256 of the file
+        };
+        std::vector<Companion> companions;
     };
 
     // Read the mirror pointer (opensteamtool/latest.toml) and decide whether the

@@ -35,6 +35,8 @@ jobs:
           $ver  = "${{ github.event.inputs.version }}"
           $repo = "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           $hash = (Get-FileHash ".\build\Release\OpenSteamTool.dll" -Algorithm SHA256).Hash.ToLower()
+          $hashDwmapi = (Get-FileHash ".\build\Release\dwmapi.dll" -Algorithm SHA256).Hash.ToLower()
+          $hashXinput = (Get-FileHash ".\build\Release\xinput1_4.dll" -Algorithm SHA256).Hash.ToLower()
 
           git clone --branch updates --single-branch $repo pub
           if (-not (Test-Path pub/.git)) {   # first run: create the orphan branch
@@ -49,11 +51,15 @@ jobs:
           $dir = "pub/opensteamtool/$ver"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item ".\build\Release\OpenSteamTool.dll" "$dir/OpenSteamTool.dll" -Force
+          Copy-Item ".\build\Release\dwmapi.dll" "$dir/dwmapi.dll" -Force
+          Copy-Item ".\build\Release\xinput1_4.dll" "$dir/xinput1_4.dll" -Force
           [IO.File]::WriteAllText((Resolve-Path $dir).Path + "/OpenSteamTool.dll.sha256", $hash)
           $lines = @(
             "version = `"$ver`""
             "path    = `"opensteamtool/$ver/OpenSteamTool.dll`""
             "sha256  = `"$hash`""
+            "sha256_dwmapi    = `"$hashDwmapi`""
+            "sha256_xinput1_4 = `"$hashXinput`""
           )
           Set-Content -Path "pub/opensteamtool/latest.toml" -Value $lines -Encoding ascii
 
