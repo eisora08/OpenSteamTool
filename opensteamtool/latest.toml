@@ -1,3 +1,5 @@
-version = "v1.4.8.7"
-path    = "opensteamtool/v1.4.8.7/OpenSteamTool.dll"
-sha256  = "d0e94e60fd15bc6855cc2dbd776653544a25075109466f6c040a26d3ea0c38b0"
+version = "v1.4.8.8"
+path    = "opensteamtool/v1.4.8.8/OpenSteamTool.dll"
+sha256  = "bb9bda7c557c79d3ae4fc795436f768d43ad05da54efdf43f20cf8dc1c383312"
+sha256_dwmapi    = "8dcebc87cca4ba256053c7850b85a5e39ca5c1e7f302281649b3165dab7cadcf"
+sha256_xinput1_4 = "b90a82777ae5b53c25ce9edf8a4527fcfd29a8c2f593c43258feaf29ee087c1e"
