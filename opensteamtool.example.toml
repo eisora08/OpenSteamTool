@@ -57,27 +57,6 @@ timeout_connect_ms = 5000
 timeout_send_ms    = 10000
 timeout_recv_ms    = 10000
 
-[donate]
-# Contribute manifest request codes for depots THIS account owns, so other users
-# can download those games. Codes are minted on demand from your signed-in Steam
-# session and posted immediately (never stored). Only depots you actually own are
-# ever reported — the rest of your library is never uploaded. Set enabled = false
-# to opt out completely.
-enabled = true
-# Archive base URL. Leave unset to use the built-in default (manifest.luastools.xyz).
-# url = "https://manifest.luastools.xyz"
-# Seconds to rest between mint cycles (min 30, default 30).
-# interval_secs = 30
-# How often to re-pull the (large) wanted list; minting still runs every cycle
-# (default 300 = 5 min). Freshness within a cycle comes from a per-manifest check.
-# wanted_refresh_secs = 300
-# Max Steam code mints per cycle (default 25).
-# max_mints_per_cycle = 25
-# Minimum gap between consecutive Steam calls, ms — the real rate cap (default 2000).
-# min_mint_interval_ms = 2000
-# Total mints per Steam session; 0 = unlimited (default 0).
-# max_mints_per_session = 0
-
 [stats]
 # Automatically query https://stats.opensteamtool.com/{appid} for a recommended
 # SteamID when no Lua setStat(appid, "steamid") override exists.
