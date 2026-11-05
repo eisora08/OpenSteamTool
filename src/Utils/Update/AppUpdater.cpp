@@ -123,7 +123,7 @@ namespace {
     }
 } // namespace
 
-CheckResult Check()
+CheckResult Check(const std::string& selfDllPath)
 {
     CheckResult r;
     r.oldVersion = OPENSTEAMTOOL_VERSION;
@@ -165,14 +165,52 @@ CheckResult Check()
         }
     }
 
-    // latest.toml is authoritative for "newest"; build tags are not semver, so any
-    // difference from the running version means there is something new to stage.
-    if (r.newVersion == r.oldVersion) {
+    // latest.toml is authoritative for "newest". An update is needed if:
+    //  - main DLL version differs, OR
+    //  - any companion DLL on disk has a different SHA-256 than the pointer.
+    // This ensures companions get updated even when the main DLL is already current.
+    bool companionsOutdated = false;
+    const std::filesystem::path selfDir = std::filesystem::path(selfDllPath).parent_path();
+    for (const auto& c : r.companions) {
+        const std::filesystem::path target = selfDir / std::filesystem::path(c.relPath).filename();
+        std::error_code ec;
+        if (!std::filesystem::exists(target, ec)) {
+            companionsOutdated = true;
+            LOG_INFO("AppUpdater: companion {} missing, will stage", target.string());
+            break;
+        }
+        // Compute SHA-256 of on-disk companion
+        std::ifstream ifs(target, std::ios::binary);
+        if (!ifs) {
+            companionsOutdated = true;
+            LOG_INFO("AppUpdater: companion {} unreadable, will stage", target.string());
+            break;
+        }
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        if (content.size() < 2 || content[0] != 'M' || content[1] != 'Z') {
+            companionsOutdated = true;
+            LOG_INFO("AppUpdater: companion {} invalid (no MZ), will stage", target.string());
+            break;
+        }
+        const std::string actual = OSTPlatform::Hash::Sha256OfBuffer(content.data(), content.size());
+        if (actual.empty() || !EqualsIgnoreCase(actual, c.sha256)) {
+            companionsOutdated = true;
+            LOG_INFO("AppUpdater: companion {} hash mismatch (disk={}, ptr={}), will stage",
+                     target.string(), actual.substr(0, 16), c.sha256.substr(0, 16));
+            break;
+        }
+    }
+
+    if (r.newVersion == r.oldVersion && !companionsOutdated) {
         LOG_INFO("AppUpdater: up to date (version {})", r.oldVersion);
         return r;
     }
 
-    LOG_INFO("AppUpdater: update available {} -> {}", r.oldVersion, r.newVersion);
+    if (companionsOutdated && r.newVersion == r.oldVersion) {
+        LOG_INFO("AppUpdater: companions outdated, staging them");
+    } else {
+        LOG_INFO("AppUpdater: update available {} -> {}", r.oldVersion, r.newVersion);
+    }
     r.updateAvailable = true;
     return r;
 }

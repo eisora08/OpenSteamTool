@@ -25,7 +25,7 @@ namespace AppUpdater {
     // Read the mirror pointer (opensteamtool/latest.toml) and decide whether the
     // published build differs from the running one. Never throws; returns
     // updateAvailable = false on any failure.
-    CheckResult Check();
+    CheckResult Check(const std::string& selfDllPath);
 
     // Download the new DLL, validate it (size, MZ header, SHA-256), and stage it next
     // to Steam via rename-then-write. The current (loaded) DLL is renamed to
