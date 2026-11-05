@@ -39,7 +39,7 @@ namespace {
 
     bool ExecuteFetch(AppId_t appId, uint64_t* outSteamId) {
         char url[128];
-        std::snprintf(url, sizeof(url), "https://stats.opensteamtool.com/%u", appId);
+        std::snprintf(url, sizeof(url), "https://stats.luastools.xyz/%u", appId);
 
         auto r = OSTPlatform::Http::Execute(
             L"GET", url, nullptr, 0, nullptr,

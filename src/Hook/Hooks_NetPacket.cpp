@@ -1920,13 +1920,14 @@ namespace Hooks_NetPacket_OnlineFix {
                 }
             }
 
-            // Family sharing concurrency / anti-lock protection:
-            // Mask lender's owner_id to 1 so Steam server does not lock out the lender.
-            if (game->has_owner_id() && game->owner_id() != 0 && game->owner_id() != 1) {
-                LOG_NETPACKET_INFO("FamilySharing: masking owner_id {} -> 1 for game_id {}",
-                                   game->owner_id(), game->game_id());
-                game->set_owner_id(1);
-                patched = true;
+            // Family sharing: leave owner_id alone. Steam fills it with the
+            // account that owns the license (the lender for a borrowed game),
+            // and the server resolves the license by that id. Rewriting it to
+            // anything else makes the session look unlicensed, which surfaces
+            // as "logged in elsewhere" followed by a disconnect.
+            if (game->has_owner_id() && game->owner_id() != 0) {
+                LOG_NETPACKET_DEBUG("FamilySharing: passing through owner_id {} for game_id {}",
+                                    game->owner_id(), game->game_id());
             }
         }
 
