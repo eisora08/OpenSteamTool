@@ -54,7 +54,9 @@ namespace Config {
 
     // [donate] — contribute manifest request codes for depots this account owns.
     struct DonateSettings {
-        bool        enabled  = true;
+        // Off by default: the donor mints request codes with the signed-in
+        // account and uploads them. Opt in explicitly via [donate] enabled.
+        bool        enabled  = false;
         std::string url;                       // base; empty = built-in default
         uint32_t    intervalSecs        = 30;
         uint32_t    maxMintsPerCycle    = 25;

@@ -42,14 +42,24 @@ namespace AppTicket {
 
     // The forge only needs SOME signed ownership ticket of this account — the
     // template's appid is overwritten. Tried in order:
-    //   1. localconfig apptickets\7 (Steam's own cache; a fresh PC has none)
-    //   2. in-memory ticket harvested from Steam's apptickets reads / 858 replies
-    //   3. any other in-memory ticket (same account, any app)
-    //   4. originate eMsg 857 for app 7 and wait for the 858 reply (brief stall)
-    static std::vector<uint8_t> ResolveForgeSource() {
+    //   1. this app's own ticket from Steam's localconfig cache (real, current)
+    //   2. this app's ticket harvested in memory this session
+    //   3. localconfig apptickets\7 (Steam's own generic cache)
+    //   4. in-memory ticket harvested from Steam's apptickets reads / 858 replies
+    //   5. any other in-memory ticket (same account, any app)
+    //   6. originate eMsg 857 for app 7 and wait for the 858 reply (brief stall)
+    static std::vector<uint8_t> ResolveForgeSource(AppId_t appId) {
         const auto usable = [](const std::vector<uint8_t>& t) {
             return t.size() > kAppTicketSignatureSize;
         };
+
+        if (appId != k_uAppIdInvalid) {
+            std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(appId);
+            if (usable(source)) return source;
+
+            source = Hooks_Decryption::GetMemCachedAppOwnershipTicket(appId);
+            if (usable(source)) return source;
+        }
 
         std::vector<uint8_t> source = Hooks_Decryption::GetCacheAppOwnershipTicket(kLocalAppTicketSourceAppId);
         if (usable(source)) return source;
@@ -72,7 +82,7 @@ namespace AppTicket {
 
     // Exploit steamdrmp's off-by-four ticket parsing vulnerability:
     static std::vector<uint8_t> ForgeLocalAppOwnershipTicket(AppId_t appId) {
-        std::vector<uint8_t> source = ResolveForgeSource();
+        std::vector<uint8_t> source = ResolveForgeSource(appId);
         if (source.size() <= kAppTicketSignatureSize) {
             LOG_ERROR("ForgeLocalAppOwnershipTicket for AppId {}: no source appticket — localconfig "
                       "apptickets\\{} is empty, nothing harvested this session, and the eMsg 857 "
@@ -99,7 +109,14 @@ namespace AppTicket {
         ticket = {};
         
         if (source == AppTicketSource::CredentialStoreOnly || source == AppTicketSource::CredentialStoreThenForge) {
-            ticket.data = GetAppOwnershipTicketFromCredentialStore(appId);
+            // Real ticket from Steam's local account cache first (fresh installs
+            // and updates write it there), registry only as a backup. The
+            // pool-account path (CredentialStoreOnly) deliberately keeps using
+            // the registry so its SteamID still matches the pool ticket.
+            if (source == AppTicketSource::CredentialStoreThenForge)
+                ticket.data = Hooks_Decryption::GetCacheAppOwnershipTicket(appId);
+            if (ticket.data.empty())
+                ticket.data = GetAppOwnershipTicketFromCredentialStore(appId);
             if (!ticket.data.empty() && ticket.data.size() >= kSteamIdTicketMinimumSize) {
                 ticket.totalSize = static_cast<uint32>(ticket.data.size());
                 ticket.appIdOffset = kAppTicketAppIdOffset;

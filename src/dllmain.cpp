@@ -104,7 +104,11 @@ static uint32_t InitThreadInner(OSTPlatform::DynamicLibrary::ModuleHandle selfMo
     // Contributes manifest request codes for depots this account owns, on
     // request. Started after the hooks are in place because it needs the
     // netpacket send path; it idles until the license list resolves anyway.
+    // Runtime default is OFF ([donate] enabled): Start() returns immediately
+    // unless the user opts in.
+#ifdef OST_ENABLE_DONATE
     ManifestDonor::Start();
+#endif
 
     // Fix library entries whose appmanifest SizeOnDisk is stuck at 0 (games
     // showing "0 B" in the library). Own detached thread: it walks every
@@ -121,7 +125,15 @@ static uint32_t InitThreadInner(OSTPlatform::DynamicLibrary::ModuleHandle selfMo
 
     // Register the bst:// URI scheme so the website can drive code redemption via this
     // DLL (rundll32 handler). HKCU, no admin; idempotent.
+    //
+    // Opt-in build only. The default build never registers the scheme and removes
+    // a legacy handler left behind by an older version (only if it points at this
+    // DLL, so another tool's bst:// handler is left alone).
+#ifdef OST_ENABLE_TOKEER
     TokeerBridge::RegisterUriScheme(std::string(SteamInstallPath) + "\\OpenSteamTool.dll");
+#else
+    TokeerBridge::RemoveUriScheme();
+#endif
 
     // Optional self-update check. Runs on its own detached thread so the network
     // round-trip never delays hook installation; staged files apply next launch.
@@ -138,7 +150,7 @@ static uint32_t InitThreadInner(OSTPlatform::DynamicLibrary::ModuleHandle selfMo
             const std::string self = std::string(SteamInstallPath) + "\\OpenSteamTool.dll";
             AppUpdater::CleanupStagedBackup(self);
 
-            const AppUpdater::CheckResult upd = AppUpdater::Check();
+            const AppUpdater::CheckResult upd = AppUpdater::Check(self);
             if (!upd.updateAvailable) return 0;
             if (!AppUpdater::DownloadAndStage(upd, self)) return 0;
 

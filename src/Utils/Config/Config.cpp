@@ -12,6 +12,7 @@ namespace {
 
     struct Snapshot {
         std::string manifestProvider = "opensteamtool";
+        bool manifestFailover = true;
         ManifestTimeouts manifestTimeouts;
         LogLevel logLevel = LogLevel::Debug;
         std::string logDir;
@@ -70,11 +71,12 @@ namespace {
         cloudLibrary           = snapshot.cloud.library;
     }
 
-    void ApplyManifestProvider(const std::string& provider) {
-        if (!ManifestClient::SetProvider(provider)) {
-            LOG_WARN("Unknown manifest.url \"{}\", keeping default", provider);
+    void ApplyManifestSettings(const Snapshot& snapshot) {
+        if (!ManifestClient::SetProvider(snapshot.manifestProvider)) {
+            LOG_WARN("Unknown manifest.url \"{}\", keeping default", snapshot.manifestProvider);
             ManifestClient::SetProvider("opensteamtool");
         }
+        ManifestClient::SetFailoverEnabled(snapshot.manifestFailover);
     }
 
     LoadResult ApplySnapshotLocked(const Snapshot& snapshot) {
@@ -93,7 +95,7 @@ namespace {
         Snapshot snapshot = MakeDefaultSnapshot(configPath);
         if (!std::filesystem::exists(configPath)) {
             LOG_INFO("Config file not found, using defaults");
-            ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyManifestSettings(snapshot);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
@@ -111,6 +113,9 @@ namespace {
             if (auto manifest = tbl["manifest"].as_table()) {
                 if (auto val = (*manifest)["url"].value<std::string>()) {
                     snapshot.manifestProvider = *val;
+                }
+                if (auto val = (*manifest)["failover"].value<bool>()) {
+                    snapshot.manifestFailover = *val;
                 }
                 if (auto val = (*manifest)["timeout_resolve_ms"].value<int64_t>())
                     snapshot.manifestTimeouts.resolve = static_cast<uint32_t>(*val);
@@ -254,7 +259,7 @@ namespace {
                     snapshot.cloud.library = *val;
             }
 
-            ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyManifestSettings(snapshot);
             LoadResult result = ApplySnapshotLocked(snapshot);
             LOG_INFO("Config loaded: manifest.url={} log.level={} lua.paths={} stats.enable_api={} remote.url_templates={}",
                      ManifestClient::ActiveProviderName(),
@@ -275,7 +280,7 @@ namespace {
             shouldApplyDefault = !g_loadedOnce;
         }
         if (shouldApplyDefault) {
-            ApplyManifestProvider(snapshot.manifestProvider);
+            ApplyManifestSettings(snapshot);
             std::lock_guard lock(g_mutex);
             const bool luaChanged = luaPaths != snapshot.luaPaths;
             ApplySnapshot(snapshot);

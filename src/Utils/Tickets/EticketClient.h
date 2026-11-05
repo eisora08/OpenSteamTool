@@ -21,16 +21,10 @@ namespace EticketClient {
     //
     // existingSteamId is the SteamID already baked into whatever static
     // AppTicket is sitting in the credential store for this app (0 if none).
-    // It lets the backend pin the mint to that SAME account when it's one of
-    // its own pool accounts — so a refreshed/nonce-bound ticket never
-    // disagrees with a ticket that's already in the registry. When the
-    // existing ticket belongs to an account the backend doesn't control (a
-    // real owner's own ticket, or one shared peer-to-peer from someone
-    // else), the backend refuses outright rather than minting a DIFFERENT
-    // account's ticket — that would otherwise leave half of Denuvo's
-    // identity checks (GetSteamID, the IPC ownership ticket) pointing at the
-    // original account while the eticket/network ownership ticket point at
-    // an unrelated pool account, guaranteeing a mismatch (88500012).
+    // It is used ONLY locally, to evict a cached mint when the registry's
+    // account changes mid-session. It is never sent to the backend: the request
+    // body is just {app_id, nonce}, and the backend picks the owning account
+    // itself.
     //
     // Returns the fresh ticket bytes, or nullopt on any failure (disabled,
     // backend down, bad response, or the existing ticket is a foreign
@@ -44,7 +38,7 @@ namespace EticketClient {
     // ticket spoofed at the netpacket layer always match the same account —
     // required by Denuvo titles that verify ownership over the network
     // (k_EMsgClientGetAppOwnershipTicket, e.g. Suicide Squad: KTJL).
-    // nonce and existingSteamId are only used on the first fetch for an app.
+    // nonce is only used on the first fetch for an app.
     std::optional<std::vector<uint8_t>> FetchOwnershipTicket(AppId_t appId, std::span<const uint8_t> nonce, uint64_t existingSteamId = 0);
 
 } // namespace EticketClient

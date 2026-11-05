@@ -15,6 +15,12 @@
 
 extern "C" __declspec(dllexport) void CALLBACK TokeerUri(HWND, HINSTANCE, LPSTR lpszCmdLine, int)
 {
+#ifndef OST_ENABLE_TOKEER
+    // bst:// is not part of this build. Stay exported so a stale registry entry
+    // calling rundll32 fails silently instead of doing anything.
+    (void)lpszCmdLine;
+    return;
+#else
     // InitThread didn't run in this process, so Log::Main is unset — initialise logging
     // against this DLL's own directory first (a no-op in Release builds).
     HMODULE self = nullptr;
@@ -24,4 +30,5 @@ extern "C" __declspec(dllexport) void CALLBACK TokeerUri(HWND, HINSTANCE, LPSTR 
     Log::Init(reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(self));
 
     TokeerBridge::HandleUri(lpszCmdLine ? std::string(lpszCmdLine) : std::string());
+#endif
 }

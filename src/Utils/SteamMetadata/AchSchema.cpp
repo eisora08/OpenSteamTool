@@ -29,12 +29,13 @@ namespace AchSchema {
 namespace {
 
 struct Ach {
-    std::string api;   // real API name (percentages zip) or display-name slug
-    std::string name;  // display name
+    std::string api;      // real API name (page/percentages) or display-name slug
+    std::string name;     // display name
     std::string desc;
-    std::string icon;  // "<hash>.jpg" (colored); reused for icon_gray
+    std::string icon;     // icon_achieved, "<hash>.jpg"
+    std::string iconGray; // icon_unachieved, "<hash>.jpg" (empty -> reuse icon)
     bool hidden = false;
-    double pct = -1.0; // global % printed on the page (-1 when absent)
+    double pct = -1.0;    // global % printed on the legacy page (-1 when absent)
 };
 
 enum class State : uint8_t { InFlight, Ready, Failed };
@@ -211,6 +212,243 @@ bool ParsePage(std::string_view html, std::vector<Ach>& out, std::string& gamena
     return !out.empty();
 }
 
+// ── SSR page parsing (current Steam Community layout) ─────────
+//
+// The achievements page is now a React SSR document; the achievement rows
+// are no longer in the HTML. Everything lives in a JSON island:
+//
+//   <script type="application/json" id="valve-ssr-data">
+//     { ... "renderContext": { "queryData": "{\"queries\":[...]}" } ... }
+//   </script>
+//
+// where queryData is itself a JSON document stored as a string. Inside it:
+//
+//   queries[].state.data.groups[].achievements[]
+//     -> api_name, name, description, hidden, archived,
+//        icon_achieved, icon_unachieved
+//
+// and the game name sits in the island's loaderData as "appName".
+
+int HexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+void AppendUtf8(std::string& out, uint32_t cp) {
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+// Decodes one level of JSON string escaping. queryData is escaped once inside
+// the island and the achievement fields are escaped again inside queryData, so
+// this runs twice on the way down.
+std::string JsonUnescape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c != '\\' || i + 1 >= s.size()) { out += c; continue; }
+        const char e = s[++i];
+        switch (e) {
+        case 'b': out += '\b'; break;
+        case 'f': out += '\f'; break;
+        case 'n': out += '\n'; break;
+        case 'r': out += '\r'; break;
+        case 't': out += '\t'; break;
+        case 'u': {
+            if (i + 4 >= s.size()) { out += e; break; }
+            uint32_t cp = 0;
+            bool ok = true;
+            for (int k = 1; k <= 4; ++k) {
+                const int v = HexValue(s[i + k]);
+                if (v < 0) { ok = false; break; }
+                cp = (cp << 4) | static_cast<uint32_t>(v);
+            }
+            if (!ok) { out += e; break; }
+            i += 4;
+            // Surrogate pair (emoji and other non-BMP names).
+            if (cp >= 0xD800 && cp <= 0xDBFF && i + 6 < s.size() &&
+                s[i + 1] == '\\' && s[i + 2] == 'u') {
+                uint32_t lo = 0;
+                bool ok2 = true;
+                for (int k = 3; k <= 6; ++k) {
+                    const int v = HexValue(s[i + k]);
+                    if (v < 0) { ok2 = false; break; }
+                    lo = (lo << 4) | static_cast<uint32_t>(v);
+                }
+                if (ok2 && lo >= 0xDC00 && lo <= 0xDFFF) {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    i += 6;
+                }
+            }
+            AppendUtf8(out, cp);
+            break;
+        }
+        default: out += e; break;  // \" \\ \/ and anything unexpected
+        }
+    }
+    return out;
+}
+
+bool IsJsonWs(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+size_t EndOfJsonString(std::string_view s, size_t quotePos) {
+    for (size_t i = quotePos + 1; i < s.size(); ++i) {
+        if (s[i] == '\\') { ++i; continue; }
+        if (s[i] == '"') return i;
+    }
+    return std::string_view::npos;
+}
+
+// Finds "key": "value" and returns the decoded value. Rejects a key whose
+// following token is not a string (e.g. an escaped "key" inside a nested
+// JSON string), so it can safely be called on the outer island.
+bool JsonStringField(std::string_view obj, std::string_view key, std::string& out) {
+    std::string pat = "\"";
+    pat += key;
+    pat += '"';
+
+    size_t search = 0;
+    while (true) {
+        const size_t p = obj.find(pat, search);
+        if (p == std::string_view::npos) return false;
+        search = p + pat.size();
+
+        size_t c = p + pat.size();
+        while (c < obj.size() && IsJsonWs(obj[c])) ++c;
+        if (c >= obj.size() || obj[c] != ':') continue;
+        ++c;
+        while (c < obj.size() && IsJsonWs(obj[c])) ++c;
+        if (c >= obj.size() || obj[c] != '"') continue;
+
+        const size_t e = EndOfJsonString(obj, c);
+        if (e == std::string_view::npos) return false;
+        out = JsonUnescape(obj.substr(c + 1, e - c - 1));
+        return true;
+    }
+}
+
+bool JsonBoolField(std::string_view obj, std::string_view key, bool& out) {
+    std::string pat = "\"";
+    pat += key;
+    pat += '"';
+
+    size_t search = 0;
+    while (true) {
+        const size_t p = obj.find(pat, search);
+        if (p == std::string_view::npos) return false;
+        search = p + pat.size();
+
+        size_t c = p + pat.size();
+        while (c < obj.size() && IsJsonWs(obj[c])) ++c;
+        if (c >= obj.size() || obj[c] != ':') continue;
+        ++c;
+        while (c < obj.size() && IsJsonWs(obj[c])) ++c;
+        if (obj.substr(c, 4) == "true") { out = true; return true; }
+        if (obj.substr(c, 5) == "false") { out = false; return true; }
+        continue;
+    }
+}
+
+// Game name from the document title:
+//   <title>Steam Community :: NAME :: Achievements</title>
+// Used because loaderData carries appName inside a doubly-escaped string.
+bool GameNameFromHtmlTitle(std::string_view html, std::string& gamename) {
+    const size_t b = html.find("<title>");
+    if (b == std::string_view::npos) return false;
+    const size_t start = b + 7;
+    const size_t e = html.find("</title>", start);
+    if (e == std::string_view::npos) return false;
+
+    const std::string title = HtmlDecode(html.substr(start, e - start));
+    static constexpr std::string_view kSep = " :: ";
+    const auto s1 = title.find(kSep);
+    if (s1 == std::string::npos) return false;
+    const auto s2 = title.rfind(kSep);
+    if (s2 <= s1) return false;
+    gamename = title.substr(s1 + kSep.size(), s2 - s1 - kSep.size());
+    return !gamename.empty();
+}
+
+// Decodes the island and hands back renderContext.queryData.
+bool ExtractSsrData(std::string_view html, std::string& queryData, std::string& appName) {
+    const size_t idPos = html.find("id=\"valve-ssr-data\"");
+    if (idPos == std::string_view::npos) return false;
+    const size_t open = html.find('>', idPos);
+    if (open == std::string_view::npos) return false;
+    const size_t close = html.find("</script>", open + 1);
+    if (close == std::string_view::npos) return false;
+    const std::string_view island = html.substr(open + 1, close - open - 1);
+
+    // Game name: loaderData carries {"appid":..,"appName":".."}.
+    JsonStringField(island, "appName", appName);
+
+    if (!JsonStringField(island, "queryData", queryData)) return false;
+
+    if (appName.empty()) JsonStringField(queryData, "appName", appName);
+    if (appName.empty()) GameNameFromHtmlTitle(html, appName);
+    return !queryData.empty();
+}
+
+bool ParseSsrPage(std::string_view html, std::vector<Ach>& out, std::string& gamename) {
+    out.clear();
+    gamename.clear();
+
+    std::string queryData;
+    if (!ExtractSsrData(html, queryData, gamename)) return false;
+
+    // Only look at achievement objects once we are inside the groups array;
+    // the same document also carries unrelated query state.
+    size_t pos = queryData.find("\"groups\"");
+    if (pos == std::string_view::npos) return false;
+
+    while (true) {
+        pos = queryData.find("\"internal_key\"", pos);
+        if (pos == std::string_view::npos) break;
+
+        const size_t next = queryData.find("\"internal_key\"", pos + 14);
+        const size_t end = (next == std::string_view::npos) ? queryData.size() : next;
+        const std::string_view obj(queryData.data() + pos, end - pos);
+
+        Ach a;
+        JsonStringField(obj, "api_name", a.api);
+        JsonStringField(obj, "name", a.name);
+        JsonStringField(obj, "description", a.desc);
+        JsonStringField(obj, "icon_achieved", a.icon);
+        JsonStringField(obj, "icon_unachieved", a.iconGray);
+
+        bool hidden = false;
+        if (JsonBoolField(obj, "hidden", hidden)) a.hidden = hidden;
+        bool archived = false;
+        if (JsonBoolField(obj, "archived", archived) && archived)
+            a.hidden = true;  // keep the entry so bit positions stay aligned
+
+        if (!(a.name.empty() && a.icon.empty() && a.api.empty()))
+            out.push_back(std::move(a));
+
+        pos = end;
+    }
+
+    return !out.empty();
+}
+
 // ── Global percentages JSON ──────────────────────────────────
 // Response: {"achievementpercentages":{"achievements":{"achievement":
 //   [{"name":"CAT1","percent":"98.8"}, ...]}}} — same order as the page.
@@ -302,7 +540,7 @@ std::string BuildSchema(uint32_t appId, const std::vector<Ach>& achs,
             b += kVdfEnd;
             PutInt(b, "hidden", a.hidden ? 1u : 0u);
             PutStr(b, "icon", a.icon);
-            PutStr(b, "icon_gray", a.icon);
+            PutStr(b, "icon_gray", a.iconGray.empty() ? a.icon : a.iconGray);
             b += kVdfEnd;  // display
             b += kVdfEnd;  // bit
         }
@@ -351,34 +589,51 @@ void FetchAndCache(uint32_t appId) {
     if (res.ok && res.status == 200 && !res.body.empty()) {
         std::vector<Ach> achs;
         std::string gamename;
-        if (ParsePage(res.body, achs, gamename)) {
-            // Adopt Valve's real API names by zipping the page against the
-            // global-percentages API (both are ordered by global %). The two
-            // sources round differently (page rounds, API truncates: 0.1 vs
-            // 0.0, 96.8 vs 96.7) so allow up to 0.11 of slack; anything else
-            // keeps display-name slugs for every achievement.
-            auto global = FetchGlobalPercentages(appId);
-            bool zip = global.size() == achs.size();
-            if (zip) {
+
+        // Current layout first; the legacy HTML parser stays as a fallback for
+        // pages that still serve the old markup (or a localized variant).
+        const bool ssr = ParseSsrPage(res.body, achs, gamename);
+        const bool parsed = ssr || ParsePage(res.body, achs, gamename);
+
+        if (parsed) {
+            std::unordered_set<std::string> shared;
+            if (ssr) {
+                // api_name ships in the page now, so the percentages round-trip
+                // (and its ordering assumptions) is no longer needed. Only fill
+                // gaps with deterministic display-name slugs.
                 for (size_t i = 0; i < achs.size(); i++) {
-                    if (std::fabs(global[i].second - achs[i].pct) > 0.11) {
-                        zip = false;
-                        break;
+                    if (achs[i].api.empty())
+                        achs[i].api = SlugApiName(achs[i].name, static_cast<uint32_t>(i), shared);
+                }
+            } else {
+                // Legacy page: adopt Valve's real API names by zipping the page
+                // against the global-percentages API (both are ordered by
+                // global %). The two sources round differently (page rounds,
+                // API truncates: 0.1 vs 0.0, 96.8 vs 96.7) so allow up to 0.11
+                // of slack; anything else keeps display-name slugs.
+                auto global = FetchGlobalPercentages(appId);
+                bool zip = global.size() == achs.size();
+                if (zip) {
+                    for (size_t i = 0; i < achs.size(); i++) {
+                        if (std::fabs(global[i].second - achs[i].pct) > 0.11) {
+                            zip = false;
+                            break;
+                        }
                     }
                 }
+                if (!zip)
+                    LOG_ACHIEVEMENT_WARN(
+                        "AchSchema: percentages unavailable for app {} ({} vs {} rows), "
+                        "using display-name slugs",
+                        appId, global.size(), achs.size());
+                for (size_t i = 0; i < achs.size(); i++) {
+                    if (zip)
+                        achs[i].api = std::move(global[i].first);
+                    else
+                        achs[i].api = SlugApiName(achs[i].name, static_cast<uint32_t>(i), shared);
+                }
             }
-            if (!zip)
-                LOG_ACHIEVEMENT_WARN(
-                    "AchSchema: percentages unavailable for app {} ({} vs {} rows), "
-                    "using display-name slugs",
-                    appId, global.size(), achs.size());
-            std::unordered_set<std::string> shared;
-            for (size_t i = 0; i < achs.size(); i++) {
-                if (zip)
-                    achs[i].api = std::move(global[i].first);
-                else
-                    achs[i].api = SlugApiName(achs[i].name, static_cast<uint32_t>(i), shared);
-            }
+
             std::string bytes = BuildSchema(appId, achs, gamename);
             bytesLen = static_cast<uint32_t>(bytes.size());
 
@@ -406,8 +661,9 @@ void FetchAndCache(uint32_t appId) {
             LOG_ACHIEVEMENT_DEBUG("AchSchema: synthesized schema for app {} ({} achievements, {} bytes)",
                                   appId, count, bytesLen);
         else
-            LOG_ACHIEVEMENT_DEBUG("AchSchema: no achievements page for app {} (http status {})",
-                                  appId, res.status);
+            LOG_ACHIEVEMENT_DEBUG("AchSchema: no achievements for app {} (http {}, body {} bytes, ssr {})",
+                                  appId, res.status, res.body.size(),
+                                  res.body.find("valve-ssr-data") != std::string::npos);
     }
     g_cv.notify_all();
 }

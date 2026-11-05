@@ -188,20 +188,34 @@ target_compile_definitions(OpenSteamTool PRIVATE
     $<$<CONFIG:Debug>:OPENSTEAMTOOL_LOGGING_ENABLED>
 )
 
-# Backend endpoint for on-demand eticket minting (strict Denuvo titles that bind
-# their encrypted app ticket to a launch nonce). Empty by default: the feature is
-# off and the DLL never makes a network request. Point your own build at your own
-# backend and the resulting DLL is self-contained, no Lua config needed:
+# Manifest donor (uploads request codes minted with the signed-in account).
+# Compiled in by default so it can be enabled with [donate] enabled = true, but
+# the runtime default is OFF (see DonateSettings in Config.h): no request is made
+# unless the user opts in. Build with -DOST_ENABLE_DONATE=OFF to remove it
+# entirely.
+option(OST_ENABLE_DONATE "Compile in the manifest donor" ON)
+if(OST_ENABLE_DONATE)
+    target_compile_definitions(OpenSteamTool PRIVATE OST_ENABLE_DONATE)
+endif()
+
+# On-demand eticket minting (strict Denuvo titles that bind their encrypted app
+# ticket to a launch nonce). This is opt-in: the default build has no eticket
+# network path at all, and seteticketurl() in Lua is rejected. Point your own
+# build at your own backend:
 #
-#   cmake -B build -DOST_ETICKET_URL="https://your-host/eticket"
+#   cmake -B build -DOST_ENABLE_ETICKET=ON -DOST_ETICKET_URL="https://your-host/eticket"
 #
 # Left out of the source deliberately so no single deployment's backend ships
-# baked into a public tree. seteticketurl() in the Lua config overrides it.
+# baked into a public tree.
+option(OST_ENABLE_ETICKET "Compile in the on-demand eticket client" OFF)
 set(OST_ETICKET_URL "" CACHE STRING
     "Backend URL for on-demand eticket minting (empty disables the feature)")
-if(OST_ETICKET_URL)
-    target_compile_definitions(OpenSteamTool PRIVATE
-        OST_ETICKET_URL="${OST_ETICKET_URL}")
+if(OST_ENABLE_ETICKET)
+    target_compile_definitions(OpenSteamTool PRIVATE OST_ENABLE_ETICKET)
+    if(OST_ETICKET_URL)
+        target_compile_definitions(OpenSteamTool PRIVATE
+            OST_ETICKET_URL="${OST_ETICKET_URL}")
+    endif()
 endif()
 
 # Self-update. On by default; the updater checks for a newer DLL on a detached
@@ -218,14 +232,23 @@ if(OST_ENABLE_UPDATER)
     target_compile_definitions(OpenSteamTool PRIVATE OST_ENABLE_UPDATER)
 endif()
 
-# Base URL of the Tokeer code server used by the bst:// bridge (code redemption).
-# Overridable per build; defaults to the public host when unset.
-#   cmake -B build -DOST_TOKEER_URL="https://luastools.xyz"
+# bst:// URI bridge (code redemption via a Tokeer code server). Off by default:
+# the default build does not register the scheme, and any legacy handler left in
+# HKCU is removed at startup. Opt in explicitly:
+#
+#   cmake -B build -DOST_ENABLE_TOKEER=ON -DOST_TOKEER_URL="https://your-host"
+#
+# With the option off, TokeerUri stays exported but is inert, so a stale
+# rundll32 invocation cannot do anything.
+option(OST_ENABLE_TOKEER "Compile in the bst:// redemption bridge" OFF)
 set(OST_TOKEER_URL "" CACHE STRING
     "Base URL for the Tokeer code server (bst:// bridge)")
-if(OST_TOKEER_URL)
-    target_compile_definitions(OpenSteamTool PRIVATE
-        OST_TOKEER_URL="${OST_TOKEER_URL}")
+if(OST_ENABLE_TOKEER)
+    target_compile_definitions(OpenSteamTool PRIVATE OST_ENABLE_TOKEER)
+    if(OST_TOKEER_URL)
+        target_compile_definitions(OpenSteamTool PRIVATE
+            OST_TOKEER_URL="${OST_TOKEER_URL}")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

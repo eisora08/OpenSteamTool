@@ -15,11 +15,11 @@
 #include <string_view>
 #include <vector>
 
-// Code-server base URL, baked in at build time. Empty by default so a public tree ships
-// no deployment's backend; point a build at yours with:
-//   cmake -B build -DOST_TOKEER_URL="https://luastools.xyz"
+// Code-server base URL, baked in at build time. Empty by default so a public tree
+// ships no deployment's backend; point a build at yours with:
+//   cmake -B build -DOST_ENABLE_TOKEER=ON -DOST_TOKEER_URL="https://your-host"
 #ifndef OST_TOKEER_URL
-#define OST_TOKEER_URL "https://luastools.xyz"
+#define OST_TOKEER_URL ""
 #endif
 
 namespace TokeerBridge {
@@ -204,6 +204,29 @@ void RegisterUriScheme(const std::string& dllPath) {
 
     if (ok) LOG_INFO("TokeerBridge: registered bst:// scheme -> {}", command);
     else    LOG_WARN("TokeerBridge: failed to register bst:// scheme");
+}
+
+void RemoveUriScheme() {
+    // Only delete the key when it is ours. Another tool may also use bst://.
+    HKEY key{};
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Classes\\bst\\shell\\open\\command",
+                      0, KEY_READ, &key) != ERROR_SUCCESS)
+        return;
+
+    char value[MAX_PATH * 2]{};
+    DWORD size = sizeof(value);
+    DWORD type = 0;
+    const LSTATUS s = RegQueryValueExA(key, nullptr, nullptr, &type,
+                                       reinterpret_cast<BYTE*>(value), &size);
+    RegCloseKey(key);
+
+    if (s != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) return;
+    if (std::string_view(value).find("OpenSteamTool.dll") == std::string_view::npos) return;
+
+    if (RegDeleteTreeA(HKEY_CURRENT_USER, "Software\\Classes\\bst") == ERROR_SUCCESS)
+        LOG_INFO("TokeerBridge: removed legacy bst:// scheme handler");
+    else
+        LOG_WARN("TokeerBridge: failed to remove legacy bst:// scheme handler");
 }
 
 } // namespace TokeerBridge

@@ -352,10 +352,18 @@ namespace LuaConfig{
         // seteticketurl("http://your-backend/eticket")
         // Endpoint that mints fresh nonce-bound encrypted app tickets for
         // strict Denuvo titles. Set to "" (or omit the call) to disable.
+#ifdef OST_ENABLE_ETICKET
         if (lua_gettop(L) < 1 || !lua_isstring(L, 1))
             return luaL_error(L, "seteticketurl requires (url: string)");
         EticketUrl = std::string(lua_tostring(L, 1));
         return 0;
+#else
+        // Compile-time cut. Stay a no-op instead of raising: the Lua watcher
+        // parses one line at a time, so an error would drop every statement
+        // sharing the line with a third-party script's seteticketurl() call.
+        LOG_WARN("seteticketurl is disabled in this build (ignored)");
+        return 0;
+#endif
     }
 
     static int lua_pinApp(lua_State* L) {

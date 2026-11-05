@@ -21,4 +21,8 @@ namespace TokeerBridge {
     // rundll32. Safe to call every startup; only rewrites when the target changed.
     void RegisterUriScheme(const std::string& dllPath);
 
+    // Remove the bst:// handler if (and only if) it points at this DLL. Leaves a
+    // handler owned by another tool untouched.
+    void RemoveUriScheme();
+
 } // namespace TokeerBridge

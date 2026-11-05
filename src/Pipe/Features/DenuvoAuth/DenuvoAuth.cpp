@@ -167,6 +167,18 @@ namespace {
     }
 
     void EnsureScanned(ProcessAuth& auth, const ProcessKey& process, AppId_t appId) {
+        // Manual override is re-read on every Apply: Lua is hot-reloaded, so
+        // adding forcedenuvo(appid) while the game is already running must take
+        // effect even though the binary was scanned once. Monotonic: never
+        // downgrade a process that was already marked as Denuvo.
+        if (LuaConfig::IsForcedDenuvo(appId)) {
+            if (!auth.denuvo) {
+                auth.denuvo = true;
+                LOG_PIPE_INFO("DenuvoAuth: appid={} forced denuvo by lua, protection scan skipped", appId);
+            }
+            return;
+        }
+
         if (auth.scanned) {
             LOG_PIPE_TRACE("DenuvoAuth: reusing cached protection result {} denuvo={}",
                            process.DebugString(), auth.denuvo);
@@ -174,10 +186,7 @@ namespace {
         }
 
         auth.scanned = true;
-        if (LuaConfig::IsForcedDenuvo(appId)) {
-            auth.denuvo = true;
-            LOG_PIPE_INFO("DenuvoAuth: forcedenuvo appid={} — skipping ProtectionScan", appId);
-        } else if (LuaConfig::IsForcedNonDenuvo(appId)) {
+        if (LuaConfig::IsForcedNonDenuvo(appId)) {
             auth.denuvo = false;
             LOG_PIPE_INFO("DenuvoAuth: forcedenuvo(false) appid={} - skipping ProtectionScan", appId);
         } else {

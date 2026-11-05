@@ -17,9 +17,9 @@ namespace EticketClient {
 namespace {
 
     // On-demand mint endpoint. The backend is POSTed
-    // {app_id, nonce(hex), existing_steam_id} and returns
+    // {app_id, nonce(hex)} and returns
     // {eticket, appticket, steam_id}. Any failure falls back to the static
-    // credential-store ticket.
+    // credential-store ticket. The signed-in SteamID is never sent.
     //
     // Resolved in two steps so a build can be self-contained without putting
     // any one deployment's backend into public source:
@@ -34,9 +34,15 @@ namespace {
 #endif
 
     std::string EticketUrl() {
+#ifdef OST_ENABLE_ETICKET
         const std::string& configured = LuaConfig::GetEticketUrl();
         if (!configured.empty()) return configured;
         return std::string(OST_ETICKET_URL);
+#else
+        // Compile-time cut: the client is not part of this build, so neither the
+        // Lua override nor a baked-in URL can re-enable it.
+        return {};
+#endif
     }
 
     // Short connect timeouts so a down/unreachable backend fails fast and the
@@ -157,6 +163,7 @@ namespace {
     // an entry is cached, subsequent calls (ownership vs eticket, any order) share
     // it so both layers always align to the same account.
     bool EnsureFetched(AppId_t appId, std::span<const uint8_t> nonce, uint64_t existingSteamId, CachedTickets& out) {
+#ifdef OST_ENABLE_ETICKET
         // No seteticketurl() in the config: feature off, never touch the network.
         // Callers fall back to the static credential-store ticket, i.e. stock OST.
         if (EticketUrl().empty()) return false;
@@ -183,14 +190,7 @@ namespace {
 
         const std::string nonceHex = ToHex(nonce);
         std::string reqBody =
-            "{\"app_id\":\"" + std::to_string(appId) + "\",\"nonce\":\"" + nonceHex + "\"";
-        // Only send existing_steam_id when we actually have one — an empty/zero
-        // value would make the backend refuse (it's read as "a ticket exists but
-        // for account 0", i.e. foreign) instead of picking an owner itself.
-        if (existingSteamId != 0) {
-            reqBody += ",\"existing_steam_id\":\"" + std::to_string(existingSteamId) + "\"";
-        }
-        reqBody += "}";
+            "{\"app_id\":\"" + std::to_string(appId) + "\",\"nonce\":\"" + nonceHex + "\"}";
 
         auto r = OSTPlatform::Http::Execute(
             L"POST", EticketUrl().c_str(),
@@ -263,6 +263,13 @@ namespace {
         LOG_IPC_INFO("EticketClient: minted appid={} eticket_bytes={} ownership_bytes={} nonce_bytes={}",
                      appId, fetched.eticket.size(), fetched.ownership.size(), nonce.size());
         return true;
+#else
+        (void)appId;
+        (void)nonce;
+        (void)existingSteamId;
+        (void)out;
+        return false;
+#endif
     }
 
 } // namespace

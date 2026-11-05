@@ -18,6 +18,11 @@ namespace ManifestClient {
     // Name of the currently active provider (for logging / diagnostics).
     const char* ActiveProviderName();
 
+    // Fall back to the next provider when one fails (default on). Off means
+    // only the configured provider is queried, matching the old behaviour.
+    void SetFailoverEnabled(bool enabled);
+    bool IsFailoverEnabled();
+
     // Resolve a manifest GID to its request code. Tries Lua first
     // (fetch_manifest_code_ex, then fetch_manifest_code), then the
     // active provider. Returns true and sets *outRequestCode on success.
