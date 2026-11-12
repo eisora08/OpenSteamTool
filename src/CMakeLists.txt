@@ -111,6 +111,7 @@ add_library(OpenSteamTool SHARED
     dllmain.cpp
 
     # Shared utilities
+    Utils/Achievements/LocalAchievements.cpp
     Utils/Tickets/AppTicket.cpp
     Utils/Tickets/LegacyCDKey.cpp
     Utils/Tickets/EticketClient.cpp

@@ -768,6 +768,10 @@ void MirrorCrSchema(uint32_t accountId, uint32_t appId, const std::string& bytes
         LOG_ACHIEVEMENT_WARN("AchSchema: failed writing {}", p.string());
 }
 
+uint32_t LocalAccountId() {
+    return g_accountId.load(std::memory_order_relaxed);
+}
+
 void SetLocalAccountId(uint64_t steamId64) {
     if (steamId64 == 0) return;
     const uint32_t accountId = static_cast<uint32_t>(steamId64 & 0xFFFFFFFFull);

@@ -28,6 +28,9 @@ namespace AchSchema {
     // feed also refreshes cloud_redirect's schema store from the local cache.
     void SetLocalAccountId(uint64_t steamId64);
 
+    // Last account id fed to SetLocalAccountId, or 0 before the first feed.
+    uint32_t LocalAccountId();
+
     // Mirror a synthesized schema into <steam>\appcache\stats\ under the names
     // the Steam client actually loads (UserGameStatsSchema_<appid>.bin and
     // UserGameStats_<accountid>_<appid>.bin), and into cloud_redirect's own
